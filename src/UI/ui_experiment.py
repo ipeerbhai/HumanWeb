@@ -113,6 +113,20 @@ class WebAutomationDSL:
         except json.JSONDecodeError:
             return f"Failed to parse response: {parsed_result}"
 
+    def keyboard_click(self, button):
+        if not self.uid:
+            self.uid = "default"
+        endpoint = f"{BASE_URL}/v1/connectors/browser/KeyboardClick/"
+        payload = {
+            "uid": self.uid,
+            "button": button.strip('"'),  # Remove quotes if present
+        }
+        response = requests.post(endpoint, json=payload)
+        if response.status_code == 200:
+            return f"Pressed key: {button}"
+        else:
+            return f"Failed to press key: {response.status_code} - {response.text}"
+
     def generate_comment(self, context):
         return f"This is a generated comment based on: {context[:50]}..."
 
@@ -136,6 +150,7 @@ def main():
 NAVIGATE https://www.linkedin.com
 ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
 TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
+KEYBOARD_CLICK "enter"
 SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
 CLICK_XPATH "//button[@aria-label='Comment']"
 SAVE_TO_VARIABLE generated_comment GENERATE_COMMENT $post_content
@@ -217,6 +232,7 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
         "SAVE_TO_VARIABLE": ["Variable Name", "Value"],
         "READ_XPATH": ["XPath"],
         "FIND_AND_SAVE": ["URL", "Query", "Variable Name"],
+        "KEYBOARD_CLICK": ["Keyboard Button"],
     }
 
     # Command addition section
