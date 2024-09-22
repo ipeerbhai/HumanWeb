@@ -34,6 +34,7 @@ class SelectedElement(BaseModel):
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
+
 @app.post("/v1/connectors/browser/update_selected_element/")
 async def update_selected_element(element: SelectedElement):
     global selected_elements
