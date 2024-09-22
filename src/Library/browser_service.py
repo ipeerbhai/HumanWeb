@@ -37,6 +37,12 @@ class ElementActions(BaseModel):
     uid: str
 
 
+class EditElement(BaseModel):
+    uid: str
+    xpath: str
+    text: str
+
+
 class SelectedElement(BaseModel):
     element_html: str
     element_name: str | None = None
@@ -177,6 +183,24 @@ async def keyboard_click(action: KeyboardAction):
         ActionChains(browser).key_down(Keys.RETURN).key_up(Keys.RETURN).perform()
 
         return {"status": "success", "message": f"Pressed key: {action.button}"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+
+@app.post("/v1/connectors/browser/EditElement/")
+async def edit_element(action: EditElement):
+    browser = None
+    if action.uid in browsers:
+        browser = browsers[action.uid]
+    try:
+        p_tag = browser.find_element(By.XPATH, action.xpath)
+
+        browser.execute_script(
+            "arguments[0].innerText = arguments[1];", p_tag, action.text
+        )
+
+        return {"status": "success", "message": f"Element Edited to {action.text}"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")

@@ -127,6 +127,20 @@ class WebAutomationDSL:
         else:
             return f"Failed to press key: {response.status_code} - {response.text}"
 
+    def edit_element(self, args):
+        if not self.uid:
+            self.uid = "default"
+        xpath, text = args.split('" "')
+        xpath = xpath[1:]
+        text = text[:-1]
+        endpoint = f"{BASE_URL}/v1/connectors/browser/EditElement/"
+        payload = {"uid": self.uid, "xpath": xpath, "text": text}
+        response = requests.post(endpoint, json=payload)
+        if response.status_code == 200:
+            return f"Element edited to {text}"
+        else:
+            return f"Failed to edit element: {response.status_code} - {response.text}"
+
     def generate_comment(self, context):
         return f"This is a generated comment based on: {context[:50]}..."
 
@@ -153,8 +167,7 @@ TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
 KEYBOARD_CLICK "enter"
 SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
 CLICK_XPATH "//button[@aria-label='Comment']"
-SAVE_TO_VARIABLE generated_comment GENERATE_COMMENT $post_content
-TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
+ASK_USER "Enter comment for the post and click 'Confirm' when done."
 """
     if "current_line" not in st.session_state:
         st.session_state.current_line = 0
@@ -233,6 +246,7 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
         "READ_XPATH": ["XPath"],
         "FIND_AND_SAVE": ["URL", "Query", "Variable Name"],
         "KEYBOARD_CLICK": ["Keyboard Button"],
+        "EDIT_ELEMENT": ["XPath", "Text"],
     }
 
     # Command addition section
@@ -253,6 +267,8 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
             new_command = f'{selected_command} {input_values["Variable Name"]} {json.dumps(input_values["Value"])}'
         elif selected_command == "FIND_AND_SAVE":
             new_command = f'{selected_command} {json.dumps(input_values["URL"])} {json.dumps(input_values["Query"])} {json.dumps(input_values["Variable Name"])}'
+        elif selected_command == "EDIT_ELEMENT":
+            new_command = f'{selected_command} {json.dumps(input_values["XPath"])} {json.dumps(input_values["Text"])}'
         else:
             new_command = f"{selected_command} {json.dumps(input_values[command_structure[selected_command][0]])}"
 
