@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, List
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from io import BytesIO
@@ -14,7 +14,7 @@ app = FastAPI()
 firefox_options = webdriver.FirefoxOptions()
 firefox_options.add_argument("--start-fullscreen")
 browsers = {} # a dictionary holding uid -> selenium.driver instances
-ast_selected_element = None
+selected_elements: List[Dict[str, str]] = []
 
 class NavigateDetails(BaseModel):
     url: str
@@ -29,24 +29,38 @@ class ElementActions(BaseModel):
 
 class SelectedElement(BaseModel):
     element_html: str
+    element_name: str | None = None
 
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
-
 @app.post("/v1/connectors/browser/update_selected_element/")
 async def update_selected_element(element: SelectedElement):
-    global last_selected_element
-    last_selected_element = element.element_html
+    global selected_elements
+    selected_elements.append({"name": element.element_name, "html": element.element_html})
     return {"status": "success"}
 
-@app.get("/v1/connectors/browser/get_selected_element/")
-async def get_selected_element():
-    if last_selected_element is not None:
-        return {"element": last_selected_element}
+@app.get("/v1/connectors/browser/get_last_selected_element/")
+async def get_last_selected_element():
+    if selected_elements:
+        return {"element": selected_elements[-1]}
     else:
         raise HTTPException(status_code=404, detail="No element has been selected yet")
-		
+
+@app.get("/v1/connectors/browser/get_all_selected_elements/")
+async def get_all_selected_elements():
+    if selected_elements:
+        return {"elements": selected_elements}
+    else:
+        raise HTTPException(status_code=404, detail="No elements have been selected yet")
+
+@app.get("/v1/connectors/browser/get_element_by_name/{element_name}")
+async def get_element_by_name(element_name: str):
+    for element in selected_elements:
+        if element["name"] == element_name:
+            return {"element": element}
+    raise HTTPException(status_code=404, detail=f"No element found with name: {element_name}")
+	
 @app.post("/v1/connectors/browser/navigate/")
 async def navigate(details: NavigateDetails):
     browser=None
