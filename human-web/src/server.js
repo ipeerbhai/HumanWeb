@@ -4,6 +4,12 @@ require("dotenv").config();
 const bodyParser = require("body-parser");
 const { Builder } = require("selenium-webdriver");
 const { Anthropic } = require("@anthropic-ai/sdk");
+const fs = require("fs");
+const {
+  CopilotRuntime,
+  AnthropicAdapter,
+  copilotRuntimeNodeHttpEndpoint,
+} = require("@copilotkit/runtime");
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
@@ -25,19 +31,19 @@ app.post("/scrape", async (req, res) => {
   try {
     await driver.get(url);
     console.log(`Opened ${url}.`);
-    console.log(`Waiting for command: "${returnCommand}"`);
+    const prompt = `Find the element that matches with the query. Query: ${returnCommand}. Find the element in the html: ${await driver.getPageSource()}  Return a JSON object with the keys 'found' (should be 1 if the element is found, 0 otherwise), 'value' (containing the value of the NAME, ID, LINK_TEXT, or CLASS_NAME of the element), and 'attribute' (containing NAME, ID, LINK_TEXT, CLASS_NAME).`;
 
-    // Wait for the specified return command
-    process.stdin.once("data", (data) => {
-      const command = data.toString().trim();
-      if (command === returnCommand) {
-        console.log(`Received command to return: "${command}"`);
-        res.send("Scraping completed or closed.");
-        driver.quit();
-      } else {
-        console.log(`Unrecognized command: "${command}"`);
-      }
+    fs.writeFile("Output.txt", prompt, (err) => {
+      if (err) throw err;
     });
+
+    const response = await anthropic.messages.create({
+      model: "claude-3-5-sonnet-20240620",
+      max_tokens: 8192,
+      messages: [{ role: "user", content: prompt }],
+    });
+    console.log("resss", response);
+    res.status(200).send(response);
   } catch (error) {
     console.error(error);
     res.status(500).send("Error occurred while scraping.");
@@ -45,23 +51,16 @@ app.post("/scrape", async (req, res) => {
   }
 });
 
-app.post("/api/copilotkit", async (req, res) => {
-  try {
-    const { messages } = req.body;
+app.use("/api/copilotkit", (req, res, next) => {
+  const serviceAdapter = new AnthropicAdapter({ anthropic });
+  const runtime = new CopilotRuntime();
+  const handler = copilotRuntimeNodeHttpEndpoint({
+    endpoint: "/api/copilotkit",
+    runtime,
+    serviceAdapter,
+  });
 
-    const response = await anthropic.messages.create({
-      model: "claude-3-opus-20240229",
-      max_tokens: 1000,
-      messages: messages,
-    });
-
-    res.json({ response: response.content[0].text });
-  } catch (error) {
-    console.error("Error:", error);
-    res
-      .status(500)
-      .json({ error: "An error occurred while processing your request." });
-  }
+  return handler(req, res, next);
 });
 
 // Start the server
