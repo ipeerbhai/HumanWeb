@@ -93,7 +93,7 @@ async def get_all_selected_elements():
     if selected_elements:
         return {"elements": selected_elements}
     else:
-        raise HTTPException(status_code=404, detail="No elements have been selected yet")
+        return {"elements": ""}
 
 @app.get("/v1/connectors/browser/get_element_by_name/{tagged_name}")
 async def get_element_by_name(tagged_name: str):

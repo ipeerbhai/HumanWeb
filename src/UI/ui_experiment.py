@@ -2,10 +2,10 @@ import streamlit as st
 import requests
 import time
 import json
+import base64
 from scraping_utils import get_element_and_analyze
 
 BASE_URL = "http://localhost:8676"
-
 
 class WebAutomationDSL:
     def __init__(self):
@@ -77,11 +77,51 @@ class WebAutomationDSL:
         else:
             return f"Failed to type: {response.status_code} - {response.text}"
 
+    def click_tagged(self, tagged_name):
+        if not self.uid:
+            return "No active browser session. Navigate to a page first."
+        endpoint = f"{BASE_URL}/v1/connectors/browser/tagged_element_action/"
+        payload = {"tagged_name": tagged_name, "action": "click", "uid": self.uid}
+        response = requests.post(endpoint, json=payload)
+        if response.status_code == 200:
+            return f"Clicked tagged element: {tagged_name}"
+        else:
+            return f"Failed to click tagged element: {response.status_code} - {response.text}"
+
+    def type_tagged(self, args):
+        if not self.uid:
+            return "No active browser session. Navigate to a page first."
+        tagged_name, text = args.split('" "')
+        tagged_name = tagged_name.strip('"')
+        text = text.strip('"')
+        text = self.resolve_variables(text)
+        endpoint = f"{BASE_URL}/v1/connectors/browser/tagged_element_action/"
+        payload = {"tagged_name": tagged_name, "action": "fill", "text": text, "uid": self.uid}
+        response = requests.post(endpoint, json=payload)
+        if response.status_code == 200:
+            return f"Typed '{text}' into tagged element: {tagged_name}"
+        else:
+            return f"Failed to type into tagged element: {response.status_code} - {response.text}"
+
+    def read_tagged(self, tagged_name):
+        if not self.uid:
+            return "No active browser session. Navigate to a page first."
+        endpoint = f"{BASE_URL}/v1/connectors/browser/tagged_element_action/"
+        payload = {"tagged_name": tagged_name, "action": "read", "uid": self.uid}
+        response = requests.post(endpoint, json=payload)
+        if response.status_code == 200:
+            return response.json().get("content", "Tagged element found but no text content")
+        else:
+            return f"Failed to read tagged element: {response.status_code} - {response.text}"
+
     def save_to_variable(self, args):
         variable_name, value = args.split(" ", 1)
         if value.startswith("READ_XPATH"):
             _, xpath = value.split(" ", 1)
             value = self.read_xpath(xpath.strip('"'))
+        elif value.startswith("READ_TAGGED"):
+            _, tagged_name = value.split(" ", 1)
+            value = self.read_tagged(tagged_name.strip('"'))
         elif value.startswith("GENERATE_COMMENT"):
             _, context = value.split(" ", 1)
             context = self.resolve_variables(context)
@@ -93,11 +133,7 @@ class WebAutomationDSL:
         url, query, var_name = args.split('" "')
         url = url[1:]
         var_name = var_name[:-1]
-        parsed_result = get_element_and_analyze(
-            url, query.strip('"')
-        )  # Replace with actual URL as needed
-
-        # Assume result is a JSON string and parse it
+        parsed_result = get_element_and_analyze(url, query.strip('"'))
         try:
             if parsed_result["found"] == 1:
                 self.variables[var_name] = parsed_result["value"]
@@ -118,6 +154,21 @@ class WebAutomationDSL:
     def ask_user(self, prompt):
         return prompt
 
+def fetch_tagged_elements():
+    endpoint = f"{BASE_URL}/v1/connectors/browser/get_all_selected_elements/"
+    response = requests.get(endpoint)
+    if response.status_code == 200:
+        return response.json().get("elements", [])
+    else:
+        return []
+
+def take_screenshot(uid):
+    endpoint = f"{BASE_URL}/v1/connectors/browser/screenshot/{uid}"
+    response = requests.get(endpoint)
+    if response.status_code == 200:
+        return base64.b64encode(response.content).decode()
+    else:
+        return None
 
 def main():
     st.title("Web Automation DSL")
@@ -127,46 +178,66 @@ def main():
     # Initialize session state
     if "script" not in st.session_state:
         st.session_state.script = """
-NAVIGATE https://www.linkedin.com
-ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
-CLICK_XPATH "//button[@aria-label='Search']"
-TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
-SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
-CLICK_XPATH "//button[@aria-label='Comment']"
-SAVE_TO_VARIABLE generated_comment GENERATE_COMMENT $post_content
-TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
+NAVIGATE "https://www.example.com"
+ASK_USER "Please confirm when ready to proceed."
+CLICK_TAGGED "search_button"
+TYPE_TAGGED "search_input" "example search"
+SAVE_TO_VARIABLE result_text READ_TAGGED "search_result"
 """
     if "current_line" not in st.session_state:
         st.session_state.current_line = 0
     if "waiting_for_user" not in st.session_state:
         st.session_state.waiting_for_user = False
     if "is_executing" not in st.session_state:
-        st.session_state.is_executing = False  # Add this line
+        st.session_state.is_executing = False
+
+    # Sidebar with tagged elements
+    st.sidebar.title("Tagged Elements")
+    tagged_elements = fetch_tagged_elements()
+    for element in tagged_elements:
+        st.sidebar.text(f"{element['tagged_name']}: {element['html'][:50]}...")
 
     # Display and edit the script
-    st.session_state.script = st.text_area(
-        "DSL Script", st.session_state.script, height=300
-    )
+    st.session_state.script = st.text_area("DSL Script", st.session_state.script, height=300)
 
-    # Create two columns for buttons
-    col1, col2 = st.columns(2)
+    # Create columns for buttons
+    col1, col2, col3, col4 = st.columns(4)
 
-    # Execute button in the first column
     with col1:
         if st.button("Execute Script"):
             st.session_state.current_line = 0
             st.session_state.waiting_for_user = False
-            st.session_state.is_executing = True  # Set executing flag
+            st.session_state.is_executing = True
             st.rerun()
 
-    # Clear button in the second column
     with col2:
+        if st.button("Step Through"):
+            if not st.session_state.is_executing:
+                st.session_state.current_line = 0
+                st.session_state.waiting_for_user = False
+                st.session_state.is_executing = True
+            if st.session_state.current_line < len(st.session_state.script.strip().split("\n")):
+                st.session_state.current_line += 1
+            st.rerun()
+
+    with col3:
         if st.button("Clear Script"):
             st.session_state.script = ""
             st.session_state.current_line = 0
             st.session_state.waiting_for_user = False
-            st.session_state.is_executing = False  # Reset executing flag
+            st.session_state.is_executing = False
             st.rerun()
+
+    with col4:
+        if st.button("Take Screenshot"):
+            if dsl.uid:
+                screenshot = take_screenshot(dsl.uid)
+                if screenshot:
+                    st.image(screenshot)
+                else:
+                    st.error("Failed to take screenshot")
+            else:
+                st.error("No active browser session")
 
     # Script execution
     if st.session_state.is_executing:
@@ -179,6 +250,8 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
             parts = line.split(" ", 1)
             command = parts[0]
             args = parts[1] if len(parts) > 1 else ""
+
+            st.text(f"Executing: {line}")
 
             if command == "ASK_USER":
                 user_prompt = args.strip('"')
@@ -203,14 +276,22 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
             st.session_state.waiting_for_user = False
             st.session_state.is_executing = False
 
+    # Display variables
+    st.subheader("Variables")
+    for var, value in dsl.variables.items():
+        st.text(f"{var}: {value}")
+
     # Define command structure
     command_structure = {
         "NAVIGATE": ["URL"],
         "ASK_USER": ["Prompt"],
         "CLICK_XPATH": ["XPath"],
+        "CLICK_TAGGED": ["Tagged Name"],
         "TYPE_XPATH": ["XPath", "Text"],
+        "TYPE_TAGGED": ["Tagged Name", "Text"],
         "SAVE_TO_VARIABLE": ["Variable Name", "Value"],
         "READ_XPATH": ["XPath"],
+        "READ_TAGGED": ["Tagged Name"],
         "FIND_AND_SAVE": ["URL", "Query", "Variable Name"],
     }
 
@@ -221,23 +302,38 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
     # Dynamic input fields based on selected command
     input_values = {}
     for arg in command_structure[selected_command]:
-        input_values[arg] = st.text_input(
-            f"Enter {arg}", key=f"{selected_command}_{arg}"
-        )
+        if arg == "Tagged Name" and tagged_elements:
+            input_values[arg] = st.selectbox(f"Select {arg}", [e['tagged_name'] for e in tagged_elements])
+        else:
+            input_values[arg] = st.text_input(f"Enter {arg}", key=f"{selected_command}_{arg}")
 
     if st.button("Add Command", key="add_command"):
-        if selected_command == "TYPE_XPATH":
-            new_command = f'{selected_command} {json.dumps(input_values["XPath"])} {json.dumps(input_values["Text"])}'
+        if selected_command in ["TYPE_XPATH", "TYPE_TAGGED"]:
+            new_command = f'{selected_command} "{input_values[command_structure[selected_command][0]]}" "{input_values[command_structure[selected_command][1]]}"'
         elif selected_command == "SAVE_TO_VARIABLE":
-            new_command = f'{selected_command} {input_values["Variable Name"]} {json.dumps(input_values["Value"])}'
+            new_command = f'{selected_command} {input_values["Variable Name"]} {input_values["Value"]}'
         elif selected_command == "FIND_AND_SAVE":
-            new_command = f'{selected_command} {json.dumps(input_values["URL"])} {json.dumps(input_values["Query"])} {json.dumps(input_values["Variable Name"])}'
+            new_command = f'{selected_command} "{input_values["URL"]}" "{input_values["Query"]}" "{input_values["Variable Name"]}"'
         else:
-            new_command = f"{selected_command} {json.dumps(input_values[command_structure[selected_command][0]])}"
+            new_command = f'{selected_command} "{input_values[command_structure[selected_command][0]]}"'
 
         st.session_state.script += f"\n{new_command}"
         st.rerun()
 
+    # Save/Load script
+    st.subheader("Save/Load Script")
+    col1, col2 = st.columns(2)
+    with col1:
+        script_name = st.text_input("Script Name")
+        if st.button("Save Script"):
+            with open(f"{script_name}.txt", "w") as f:
+                f.write(st.session_state.script)
+            st.success(f"Script saved as {script_name}.txt")
+    with col2:
+        uploaded_file = st.file_uploader("Load Script", type="txt")
+        if uploaded_file is not None:
+            st.session_state.script = uploaded_file.getvalue().decode()
+            st.rerun()
 
 if __name__ == "__main__":
     main()
