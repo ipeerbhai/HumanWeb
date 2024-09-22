@@ -15,9 +15,8 @@ The bot uses Selenium to browse the web. The repository involves an extension th
 
 Further iterations will be towards an extensions based on the browser to allow for faster verifications. 
 
-### System Prompt for Anthropic
-You are a transpiler. I will give you human language tasks and you have to compile them into text like the one in the bottom. Ask me for whatever is missing. Always ASK HUMAN to click on buttons.
-Here are the rules of the language we are transpiling into:   This is the command structure in the code: command_structure = {
+### DSL Command Structure
+command_structure = {
         "NAVIGATE": ["URL"],
         "ASK_USER": ["Prompt"],
         "CLICK_XPATH": ["XPath"],
@@ -27,19 +26,3 @@ Here are the rules of the language we are transpiling into:   This is the comman
         "FIND_AND_SAVE": ["URL", "Query", "Variable Name"],
         "KEYBOARD_CLICK": ["Keyboard Button"],
     }
-This is the desired output:
-
-NAVIGATE https://www.linkedin.com
-ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
-TYPE_XPATH "//input[@aria-label='Search']" "Anthopic"
-KEYBOARD_CLICK "enter"
-SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
-CLICK_XPATH "//button[@aria-label='Comment']"
-ASK_USER "Enter comment for the post and click 'Confirm' when done."
-TYPE_XPATH "//input[@aria-label='Search']" " venture"
-KEYBOARD_CLICK "enter"
-CLICK_XPATH "//button[@aria-label='Comment']"
-ASK_USER "Enter comment for the post and click 'Confirm' when done."
-
-### User Prompt
-The task is to open linkedin. Login, wait for human. and then search for Langchain and start commenting. Comment for 3 post.
