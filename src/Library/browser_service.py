@@ -223,26 +223,24 @@ async def tagged_element_action(action_details: TaggedElementAction):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/connectors/browser/press_key_tagged/")
-async def press_key_tagged(tagged_name: str, key: str, uid: str):
+async def press_key_tagged(action_details: TaggedElementAction):
     """
     Press a specified key on a tagged element.
     
-    :param tagged_name: The name of the tagged element
-    :param key: The key to press (e.g., "enter", "escape")
-    :param uid: The unique identifier for the browser instance
+    :param action_details: TaggedElementAction object containing the tagged element name, key to press, and browser UID
     :return: A success message or an error if the action fails
     """
-    element = find_tagged_element(tagged_name, uid)
+    element = find_tagged_element(action_details.tagged_name, action_details.uid)
     if not element:
-        raise HTTPException(status_code=404, detail=f"Tagged element '{tagged_name}' not found")
+        raise HTTPException(status_code=404, detail=f"Tagged element '{action_details.tagged_name}' not found")
     
     try:
-        if key.lower() == "enter":
+        if action_details.action.lower() == "enter":
             element.send_keys(Keys.ENTER)
-        elif key.lower() == "escape":
+        elif action_details.action.lower() == "escape":
             element.send_keys(Keys.ESCAPE)
         else:
-            raise HTTPException(status_code=400, detail=f"Unsupported key: {key}")
+            raise HTTPException(status_code=400, detail=f"Unsupported key: {action_details.action}")
         
         return {"status": "success"}
     except WebDriverException as e:

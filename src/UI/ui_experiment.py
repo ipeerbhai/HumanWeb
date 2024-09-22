@@ -91,6 +91,8 @@ class WebAutomationDSL:
         response = requests.post(endpoint, json=payload)
         if response.status_code == 200:
             return f"Clicked tagged element: {tagged_name}"
+        elif response.status_code == 404:
+            return f"Tagged element not found: {tagged_name}"
         else:
             return f"Failed to click tagged element: {response.status_code} - {response.text}"
 
@@ -106,6 +108,8 @@ class WebAutomationDSL:
         response = requests.post(endpoint, json=payload)
         if response.status_code == 200:
             return f"Typed '{text}' into tagged element: {tagged_name}"
+        elif response.status_code == 404:
+            return f"Tagged element not found: {tagged_name}"
         else:
             return f"Failed to type into tagged element: {response.status_code} - {response.text}"
 
@@ -117,8 +121,26 @@ class WebAutomationDSL:
         response = requests.post(endpoint, json=payload)
         if response.status_code == 200:
             return response.json().get("content", "Tagged element found but no text content")
+        elif response.status_code == 404:
+            return f"Tagged element not found: {tagged_name}"
         else:
             return f"Failed to read tagged element: {response.status_code} - {response.text}"
+
+    def press_key_tagged(self, args):
+        if not self.uid:
+            return "No active browser session. Navigate to a page first."
+        tagged_name, key = args.split('" "')
+        tagged_name = tagged_name.strip('"')
+        key = key.strip('"').lower()
+        endpoint = f"{BASE_URL}/v1/connectors/browser/press_key_tagged/"
+        payload = {"tagged_name": tagged_name, "action": key, "uid": self.uid}
+        response = requests.post(endpoint, json=payload)
+        if response.status_code == 200:
+            return f"Pressed {key} key on tagged element: {tagged_name}"
+        elif response.status_code == 404:
+            return f"Tagged element not found: {tagged_name}"
+        else:
+            return f"Failed to press key on tagged element: {response.status_code} - {response.text}"
 
     def save_to_variable(self, args):
         variable_name, value = args.split(" ", 1)
@@ -303,6 +325,7 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
         "READ_XPATH": ["XPath"],
         "READ_TAGGED": ["Tagged Name"],
         "FIND_AND_SAVE": ["URL", "Query", "Variable Name"],
+        "PRESS_KEY_TAGGED": ["Tagged Name", "Key"],
     }
 
     # Command addition section
@@ -318,7 +341,7 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
             input_values[arg] = st.text_input(f"Enter {arg}", key=f"{selected_command}_{arg}")
 
     if st.button("Add Command", key="add_command"):
-        if selected_command in ["TYPE_XPATH", "TYPE_TAGGED"]:
+        if selected_command in ["TYPE_XPATH", "TYPE_TAGGED", "PRESS_KEY_TAGGED"]:
             new_command = f'{selected_command} "{input_values[command_structure[selected_command][0]]}" "{input_values[command_structure[selected_command][1]]}"'
         elif selected_command == "SAVE_TO_VARIABLE":
             new_command = f'{selected_command} {input_values["Variable Name"]} {input_values["Value"]}'
