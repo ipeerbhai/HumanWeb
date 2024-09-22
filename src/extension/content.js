@@ -10,11 +10,25 @@ modal.innerHTML = `
 `;
 document.body.appendChild(modal);
 
+// Function to highlight the selected element
+function highlightElement(element) {
+    const oldOutline = element.style.outline;
+    const oldOutlineOffset = element.style.outlineOffset;
+    element.style.outline = '2px solid #ff0000'; // Red outline
+    element.style.outlineOffset = '1px';
+    return () => {
+        element.style.outline = oldOutline;
+        element.style.outlineOffset = oldOutlineOffset;
+    };
+}
+
 // Function to show the modal and get user input
-function showModal() {
+function showModal(element) {
     return new Promise((resolve, reject) => {
         const modalElement = document.getElementById('element-name-modal');
         const inputElement = document.getElementById('element-name-input');
+
+        const removeHighlight = highlightElement(element);
 
         modalElement.style.display = 'block';
         inputElement.focus();
@@ -25,12 +39,14 @@ function showModal() {
                 if (name) {
                     modalElement.style.display = 'none';
                     inputElement.value = ''; // Clear the input
+                    removeHighlight();
                     resolve(name);
                 }
             }
             if (event.key === 'Escape') {
                 modalElement.style.display = 'none';
                 inputElement.value = ''; // Clear the input
+                removeHighlight();
                 reject('Cancelled');
             }
         };
@@ -72,7 +88,7 @@ browser.runtime.onMessage.addListener((message) => {
         const clickedElement = document.elementFromPoint(lastClickX, lastClickY);
         
         if (clickedElement) {
-            showModal()
+            showModal(clickedElement)
                 .then(elementName => {
                     sendSelectedElement(clickedElement.outerHTML, elementName);
                     console.log(`Selected element "${elementName}":`, clickedElement.outerHTML);
