@@ -3,12 +3,16 @@
 from pydantic import BaseModel
 import requests
 import json
+from datetime import datetime
 from scraping_utils import get_element_and_analyze
 import asyncio
 from typing import Dict, List
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
+def console_log(message):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}")
 
 BASE_URL = "http://localhost:8676"
 
@@ -203,6 +207,7 @@ async def set_execution_status(status: StatusModel):
 
 @app.post("/execute_script")
 async def execute_script():
+    console_log("Starting script execution")
     dsl.is_executing = True
     dsl.current_line = 0
     dsl.waiting_for_user = False
@@ -215,10 +220,13 @@ async def execute_script():
             parts = line.split(" ", 1)
             command = parts[0]
             args = parts[1] if len(parts) > 1 else ""
+            console_log(f"Executing command: {command} with args: {args}")
             result = dsl.execute_command(command, args)
+            console_log(f"Command result: {result}")
             results.append({"line": line, "result": result})
             if command == "ASK_USER":
                 dsl.waiting_for_user = True
+                console_log(f"Waiting for user input. Prompt: {args}")
                 return JSONResponse(content={
                     "results": results,
                     "waiting_for_user": True,
@@ -228,13 +236,16 @@ async def execute_script():
         dsl.current_line += 1
 
     dsl.is_executing = False
+    console_log("Script execution completed")
     return JSONResponse(content={"results": results, "script_completed": True})
 
 @app.post("/continue_execution")
 async def continue_execution():
     if not dsl.waiting_for_user:
+        console_log("Attempted to continue execution, but not waiting for user input")
         return JSONResponse(content={"error": "Not waiting for user input"})
     
+    console_log("Continuing script execution after user input")
     dsl.waiting_for_user = False
     dsl.current_line += 1
     return await execute_script()
