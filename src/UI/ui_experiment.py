@@ -19,10 +19,8 @@ class WebAutomationDSL:
 
     def navigate(self, url):
         try:
-            # Try to decode the URL in case it's JSON-encoded
             url = json.loads(url)
         except json.JSONDecodeError:
-            # If it's not JSON-encoded, use it as is
             pass
         
         endpoint = f"{BASE_URL}/v1/connectors/browser/navigate/"
@@ -100,7 +98,6 @@ class WebAutomationDSL:
         return f"Saved value to variable {variable_name}"
 
     def generate_comment(self, context):
-        # Placeholder function - replace with actual AI model or API call
         return f"This is a generated comment based on: {context[:50]}..."
 
     def resolve_variables(self, text):
@@ -109,7 +106,7 @@ class WebAutomationDSL:
         return text
 
     def ask_user(self, prompt):
-        return prompt  # This will be handled in the Streamlit app
+        return prompt
 
 def main():
     st.title("Web Automation DSL")
@@ -132,27 +129,37 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
     # Display and edit the script
     st.session_state.script = st.text_area("DSL Script", st.session_state.script, height=300)
 
-    # Execute button
-    if st.button("Execute Script"):
-        lines = st.session_state.script.strip().split('\n')
-        for line in lines:
-            parts = line.strip().split(' ', 1)
-            command = parts[0]
-            args = parts[1] if len(parts) > 1 else ''
-            
-            if command == "ASK_USER":
-                user_prompt = args.strip('"')
-                user_action = st.empty()
-                with user_action.container():
-                    st.write(user_prompt)
-                    if st.button("Confirm"):
-                        user_action.empty()
-                        st.write(f"User confirmed: {user_prompt}")
-            else:
-                result = dsl.execute_command(command, args)
-                st.write(result)
-            
-            time.sleep(1)  # Small delay between commands
+    # Create two columns for buttons
+    col1, col2 = st.columns(2)
+
+    # Execute button in the first column
+    with col1:
+        if st.button("Execute Script"):
+            lines = st.session_state.script.strip().split('\n')
+            for line in lines:
+                parts = line.strip().split(' ', 1)
+                command = parts[0]
+                args = parts[1] if len(parts) > 1 else ''
+                
+                if command == "ASK_USER":
+                    user_prompt = args.strip('"')
+                    user_action = st.empty()
+                    with user_action.container():
+                        st.write(user_prompt)
+                        if st.button("Confirm"):
+                            user_action.empty()
+                            st.write(f"User confirmed: {user_prompt}")
+                else:
+                    result = dsl.execute_command(command, args)
+                    st.write(result)
+                
+                time.sleep(1)
+
+    # Clear button in the second column
+    with col2:
+        if st.button("Clear Script"):
+            st.session_state.script = ""
+            st.rerun()
 
     # Define command structure
     command_structure = {
