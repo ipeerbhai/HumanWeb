@@ -2,6 +2,8 @@ from typing import Dict, List
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from io import BytesIO
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver import ActionChains
 from pydantic import BaseModel
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -15,6 +17,11 @@ firefox_options = webdriver.FirefoxOptions()
 firefox_options.add_argument("--start-fullscreen")
 browsers = {}  # a dictionary holding uid -> selenium.driver instances
 selected_elements: List[Dict[str, str]] = []
+
+
+class KeyboardAction(BaseModel):
+    uid: str
+    button: str
 
 
 class NavigateDetails(BaseModel):
@@ -144,7 +151,11 @@ async def find_and_do_action(element_details: ElementActions):
             case "xpath":
                 field_search = By.XPATH
 
-        field = browser.find_element(field_search, element_details.Search)
+        search_element = element_details.Search.strip('"')
+
+        browser.implicitly_wait(2)
+        field = browser.find_element(field_search, search_element)
+        browser.implicitly_wait(2)
 
         # Extend for other "By" methods like name, xpath, etc.
 
@@ -155,6 +166,20 @@ async def find_and_do_action(element_details: ElementActions):
                 field.send_keys(line)
     except WebDriverException as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/connectors/browser/KeyboardClick/")
+async def keyboard_click(action: KeyboardAction):
+    browser = None
+    if action.uid in browsers:
+        browser = browsers[action.uid]
+    try:
+        ActionChains(browser).key_down(Keys.RETURN).key_up(Keys.RETURN).perform()
+
+        return {"status": "success", "message": f"Pressed key: {action.button}"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
 @app.get("/v1/connectors/browser/human_source/{uid}")
