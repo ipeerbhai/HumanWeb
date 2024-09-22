@@ -1,34 +1,23 @@
 <!DOCTYPE html>
 <html>
-
 <head>
-    <title>Set API Key</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            padding: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 10px;
-        }
-
-        input,
-        button {
-            display: block;
-            width: 100%;
-            margin-bottom: 20px;
-        }
-    </style>
+    <title>Web Automation DSL</title>
+    <link rel="stylesheet" type="text/css" href="styles.css">
 </head>
-
 <body>
-    <label for="apiKey">Enter API Key for Claude:</label>
-    <input type="text" id="apiKey" placeholder="Your API Key">
-    <button id="saveKey">Save Key</button>
-
+    <div id="chat-header">Web Automation DSL</div>
+    <div id="chat-content">
+        <textarea id="script-area" rows="10" cols="50"></textarea>
+        <button id="execute-button">Execute Script</button>
+        <button id="clear-button">Clear Script</button>
+        <div id="output-area"></div>
+        <div id="command-addition">
+            <h3>Add New Command</h3>
+            <select id="command-select"></select>
+            <div id="command-inputs"></div>
+            <button id="add-command-button">Add Command</button>
+        </div>
+    </div>
     <script src="popup.js"></script>
 </body>
-
 </html>

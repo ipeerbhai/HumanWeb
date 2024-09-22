@@ -1,72 +1,140 @@
-/* styles.css */
+/* Common styles */
+:root {
+  --primary-color: #007bff;
+  --secondary-color: #4caf50;
+  --danger-color: #f44336;
+  --background-color: #fefefe;
+  --text-color: #333;
+  --border-color: #ccc;
+}
+
+/* Modal styles */
 #element-name-modal {
-    display: none;
-    position: fixed;
-    z-index: 10000;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0,0,0,0.4);
-    font-family: Arial, sans-serif;
+  display: none;
+  position: fixed;
+  z-index: 10000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.4);
+  font-family: Arial, sans-serif;
 }
 
 #element-name-modal .modal-content {
-    background-color: #fefefe;
-    margin: 15% auto;
-    padding: 20px;
-    border: 1px solid #888;
-    width: 300px;
-    border-radius: 5px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  background-color: var(--background-color);
+  color: var(--text-color);
+  margin: 15% auto;
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  width: 300px;
+  border-radius: 5px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 #element-name-modal input {
-    width: 100%;
-    padding: 10px;
-    margin-bottom: 10px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    box-sizing: border-box;
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-sizing: border-box;
+  background-color: var(--background-color);
+  color: var(--text-color);
 }
 
 #element-name-modal .button-container {
-    display: flex;
-    justify-content: flex-end;
+  display: flex;
+  justify-content: flex-end;
 }
 
 #element-name-modal button {
-    padding: 10px 15px;
-    margin-left: 10px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
+  padding: 10px 15px;
+  margin-left: 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
 }
 
 #submit-button {
-    background-color: #4CAF50;
-    color: white;
+  background-color: var(--secondary-color);
+  color: white;
 }
 
 #cancel-button {
-    background-color: #f44336;
-    color: white;
+  background-color: var(--danger-color);
+  color: white;
 }
 
+/* Chat UI styles */
+#extension-chat-icon {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 50px;
+  height: 50px;
+  background-color: var(--primary-color);
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  z-index: 9999;
+  color: white;
+  font-size: 24px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+#extension-chat-window {
+  position: fixed;
+  bottom: 80px;
+  right: 20px;
+  width: 300px;
+  height: 400px;
+  background-color: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  z-index: 9998;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+}
+
+#chat-header {
+  background-color: var(--primary-color);
+  color: white;
+  padding: 10px;
+  font-weight: bold;
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+}
+
+#chat-content {
+  padding: 10px;
+  flex-grow: 1;
+  overflow-y: auto;
+}
+
+/* Dark mode styles */
 @media (prefers-color-scheme: dark) {
-    #element-name-modal .modal-content {
-        background-color: #333;
-        color: #fff;
-    }
-    #element-name-modal input {
-        background-color: #444;
-        color: #fff;
-        border-color: #555;
-    }
-    #submit-button {
-        background-color: #45a049;
-    }
-    #cancel-button {
-        background-color: #da190b;
-    }
+  :root {
+    --primary-color: #0056b3;
+    --secondary-color: #45a049;
+    --danger-color: #da190b;
+    --background-color: #333;
+    --text-color: #fff;
+    --border-color: #555;
+  }
+
+  #element-name-modal .modal-content,
+  #extension-chat-window {
+    background-color: var(--background-color);
+    color: var(--text-color);
+  }
+
+  #element-name-modal input {
+    background-color: #444;
+    color: var(--text-color);
+    border-color: var(--border-color);
+  }
 }

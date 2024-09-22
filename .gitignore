@@ -1,4 +1,5 @@
 .venv
+venv/
 .env
 # Node modules at any level
 **/node_modules/
