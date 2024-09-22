@@ -1,0 +1,27 @@
+/* Overlay div that can be dragged */
+#helloOverlay {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    width: 250px;
+    height: 150px;
+    background-color: rgba(0, 0, 0, 0.8);
+    z-index: 9999;
+    border-radius: 10px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: move;
+    /* Shows the move cursor */
+    user-select: none;
+    /* Prevents text selection while dragging */
+}
+
+/* Content inside the overlay */
+#helloContent {
+    color: white;
+    font-size: 20px;
+    font-family: Arial, sans-serif;
+    text-align: center;
+    pointer-events: auto;
+}
