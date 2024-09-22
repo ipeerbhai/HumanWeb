@@ -2,10 +2,84 @@ import streamlit as st
 import requests
 import time
 import json
+import os
+import re
 from scraping_utils import get_element_and_analyze
+from dotenv import load_dotenv
+from anthropic import Anthropic
 
 BASE_URL = "http://localhost:8676"
 
+load_dotenv()
+
+# Initialize Anthropic client
+anthropic = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
+def generate_dsl_script_anthropic(user_prompt):
+    try:
+        # Comprehensive prompt explaining the DSL
+        dsl_explanation = """
+You are an expert in a domain-specific language (DSL) used for web automation and interaction. This DSL is designed to provide simple, readable instructions for navigating websites, interacting with elements, and performing various tasks. Here's an example of the DSL in action:
+
+```
+NAVIGATE https://www.linkedin.com
+ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
+TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
+KEYBOARD_CLICK "enter"
+SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
+CLICK_XPATH "//button[@aria-label='Comment']"
+SAVE_TO_VARIABLE generated_comment GENERATE_COMMENT $post_content
+TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
+```
+
+Here's what each instruction does:
+
+1. NAVIGATE: Opens a specified URL in the web browser.
+2. ASK_USER: Displays a message to the user and waits for confirmation.
+3. TYPE_XPATH: Finds an element using an XPath selector and types the specified text into it.
+4. KEYBOARD_CLICK: Simulates a keyboard key press (in this case, the Enter key).
+5. SAVE_TO_VARIABLE: Stores data in a variable for later use.
+6. READ_XPATH: Reads the text content of an element identified by an XPath selector.
+7. CLICK_XPATH: Clicks on an element identified by an XPath selector.
+8. GENERATE_COMMENT: A special function that generates a comment based on the given content.
+
+When using this DSL:
+- Each instruction should be on a new line.
+- XPath selectors are used to identify elements on the web page.
+- Variables are referenced using the $ symbol.
+- String literals should be enclosed in double quotes.
+
+Your task is to generate accurate DSL instructions for the following scenario:
+
+{user_prompt}
+
+Please provide the DSL instructions for this scenario, ensuring they follow the format and rules of the language as demonstrated in the example. Enclose the DSL script in triple backticks (```).
+"""
+
+        # Combine the explanation with the user prompt
+        full_prompt = f"{dsl_explanation}\n\n{user_prompt}"
+
+        # Use Anthropic to generate the DSL script
+        message = anthropic.messages.create(
+            model="claude-3-opus-20240229",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": full_prompt}]
+        )
+
+        print(message.content)
+        
+        # Extract the text from the response
+        content = message.content[0].text if isinstance(message.content, list) else message.content
+        
+        match = re.search(r'```(.*?)```', content, re.DOTALL)
+        
+        if match:
+            dsl_script = match.group(1).strip()
+            return dsl_script
+        else:
+            return "No DSL script found in the response."
+    except Exception as e:
+        return f"Error occurred: {e}"
 
 class WebAutomationDSL:
     def __init__(self):
@@ -234,6 +308,22 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
         "FIND_AND_SAVE": ["URL", "Query", "Variable Name"],
         "KEYBOARD_CLICK": ["Keyboard Button"],
     }
+
+    # Command generation section
+    st.subheader("Generate Commands with Claude")
+    task_description = st.text_area("Describe the web automation task", height=100)
+    if st.button("Generate Commands"):
+        if task_description:
+            with st.spinner("Generating commands..."):
+                generated_commands = generate_dsl_script_anthropic(task_description)
+                st.text_area("Generated Commands", generated_commands, height=200)
+                if st.button("Add Generated Commands to Script"):
+                    st.session_state.script += f"\n{generated_commands}"
+                    st.rerun()
+        else:
+            st.warning("Please enter a task description.")
+
+    st.markdown("---")  # Add a separator between sections
 
     # Command addition section
     st.subheader("Add New Command")
