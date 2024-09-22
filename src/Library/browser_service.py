@@ -14,6 +14,7 @@ app = FastAPI()
 firefox_options = webdriver.FirefoxOptions()
 firefox_options.add_argument("--start-fullscreen")
 browsers = {} # a dictionary holding uid -> selenium.driver instances
+ast_selected_element = None
 
 class NavigateDetails(BaseModel):
     url: str
@@ -26,10 +27,26 @@ class ElementActions(BaseModel):
     Text: List[str] | None = []
     uid: str
 
+class SelectedElement(BaseModel):
+    element_html: str
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
 
+@app.post("/v1/connectors/browser/update_selected_element/")
+async def update_selected_element(element: SelectedElement):
+    global last_selected_element
+    last_selected_element = element.element_html
+    return {"status": "success"}
+
+@app.get("/v1/connectors/browser/get_selected_element/")
+async def get_selected_element():
+    if last_selected_element is not None:
+        return {"element": last_selected_element}
+    else:
+        raise HTTPException(status_code=404, detail="No element has been selected yet")
+		
 @app.post("/v1/connectors/browser/navigate/")
 async def navigate(details: NavigateDetails):
     browser=None
