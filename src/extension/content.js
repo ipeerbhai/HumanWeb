@@ -64,7 +64,7 @@ function sendSelectedElement(elementHtml, elementName) {
         },
         body: JSON.stringify({
             element_html: elementHtml,
-            element_name: elementName
+            tagged_name: elementName
         }),
     })
     .then(response => response.json())

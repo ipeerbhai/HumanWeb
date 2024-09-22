@@ -179,7 +179,9 @@ def take_screenshot(uid):
 def main():
     st.title("Web Automation DSL")
 
-    dsl = WebAutomationDSL()
+    # Initialize dsl in session state if it doesn't exist
+    if 'dsl' not in st.session_state:
+        st.session_state.dsl = WebAutomationDSL()
 
     # Initialize session state
     if "script" not in st.session_state:
@@ -238,8 +240,8 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
 
     with col4:
         if st.button("Take Screenshot"):
-            if dsl.uid:
-                screenshot = take_screenshot(dsl.uid)
+            if st.session_state.dsl.uid:
+                screenshot = take_screenshot(st.session_state.dsl.uid)
                 if screenshot:
                     st.image(screenshot)
                 else:
@@ -272,7 +274,7 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
                     st.session_state.waiting_for_user = True
                 break
             else:
-                result = dsl.execute_command(command, args)
+                result = st.session_state.dsl.execute_command(command, args)
                 st.write(result)
                 st.session_state.current_line += 1
 
@@ -286,7 +288,7 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
 
     # Display variables
     st.subheader("Variables")
-    for var, value in dsl.variables.items():
+    for var, value in st.session_state.dsl.variables.items():
         st.text(f"{var}: {value}")
 
     # Define command structure
