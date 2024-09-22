@@ -60,6 +60,12 @@ async def get_element_by_name(element_name: str):
         if element["name"] == element_name:
             return {"element": element}
     raise HTTPException(status_code=404, detail=f"No element found with name: {element_name}")
+
+@app.get("/v1/connectors/browser/clear_selected_elements/")
+async def clear_selected_elements():
+    global selected_elements
+    selected_elements = []
+    return {"status": "success"}
 	
 @app.post("/v1/connectors/browser/navigate/")
 async def navigate(details: NavigateDetails):
