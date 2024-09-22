@@ -24,12 +24,15 @@ You are an expert in a domain-specific language (DSL) used for web automation an
 ```
 NAVIGATE https://www.linkedin.com
 ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
-TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
+TYPE_XPATH "//input[@aria-label='Search']" "Anthropic"
 KEYBOARD_CLICK "enter"
 SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
 CLICK_XPATH "//button[@aria-label='Comment']"
-SAVE_TO_VARIABLE generated_comment GENERATE_COMMENT $post_content
-TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
+ASK_USER "Enter comment for the post and click 'Confirm' when done."
+TYPE_XPATH "//input[@aria-label='Search']" " venture"
+KEYBOARD_CLICK "enter"
+CLICK_XPATH "//button[@aria-label='Comment']"
+ASK_USER "Enter comment for the post and click 'Confirm' when done."
 ```
 
 Here's what each instruction does:
