@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import time
 import json
+from scraping_utils import get_element_and_analyze
 
 BASE_URL = "http://localhost:8676"
 
@@ -96,6 +97,22 @@ class WebAutomationDSL:
             value = self.generate_comment(context)
         self.variables[variable_name] = value
         return f"Saved value to variable {variable_name}"
+    
+    def find_and_save(self, args):
+        url, query, var_name = args.split('" "')
+        url = url[1:]
+        var_name = var_name[:-1]
+        parsed_result = get_element_and_analyze(url, query.strip('"'))  # Replace with actual URL as needed
+
+        # Assume result is a JSON string and parse it
+        try:
+            if parsed_result['found'] == 1:
+                self.variables[var_name] = parsed_result['value']
+                return f"Saved '{parsed_result['value']}' to variable '{var_name}'"
+            else:
+                return f"Element not found for query: {query}"
+        except json.JSONDecodeError:
+            return f"Failed to parse response: {parsed_result}"
 
     def generate_comment(self, context):
         return f"This is a generated comment based on: {context[:50]}..."
@@ -116,14 +133,7 @@ def main():
     # Initialize session state
     if 'script' not in st.session_state:
         st.session_state.script = """
-NAVIGATE https://www.linkedin.com
-ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
-CLICK_XPATH "//button[@aria-label='Search']"
-TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
-SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
-CLICK_XPATH "//button[@aria-label='Comment']"
-SAVE_TO_VARIABLE generated_comment GENERATE_COMMENT $post_content
-TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
+FIND_AND_SAVE "https://www.google.com/" "search input" "search bar"
 """
 
     # Display and edit the script
@@ -169,6 +179,7 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
         "TYPE_XPATH": ["XPath", "Text"],
         "SAVE_TO_VARIABLE": ["Variable Name", "Value"],
         "READ_XPATH": ["XPath"],
+        "FIND_AND_SAVE": ["URL", "Query", "Variable Name"]
     }
 
     # Command addition section
@@ -185,6 +196,8 @@ TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
             new_command = f'{selected_command} {json.dumps(input_values["XPath"])} {json.dumps(input_values["Text"])}'
         elif selected_command == "SAVE_TO_VARIABLE":
             new_command = f'{selected_command} {input_values["Variable Name"]} {json.dumps(input_values["Value"])}'
+        elif selected_command == "FIND_AND_SAVE":
+            new_command = f'{selected_command} {json.dumps(input_values["URL"])} {json.dumps(input_values["Query"])} {json.dumps(input_values["Variable Name"])}'
         else:
             new_command = f'{selected_command} {json.dumps(input_values[command_structure[selected_command][0]])}'
         
