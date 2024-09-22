@@ -47,9 +47,15 @@ class WebAutomationDSL:
 
     def click_xpath(self, xpath):
         if not self.uid:
-            return "No active browser session. Navigate to a page first."
+            self.uid = "default"
         endpoint = f"{BASE_URL}/v1/connectors/browser/FindDo/"
-        payload = {"Search": xpath, "By": "xpath", "Action": "click", "uid": self.uid}
+        payload = {
+            "Search": xpath,
+            "By": "xpath",
+            "Action": "click",
+            "Text": "",
+            "uid": self.uid,
+        }
         response = requests.post(endpoint, json=payload)
         if response.status_code == 200:
             return f"Clicked element at {xpath}"
@@ -58,7 +64,7 @@ class WebAutomationDSL:
 
     def type_xpath(self, args):
         if not self.uid:
-            return "No active browser session. Navigate to a page first."
+            self.uid = "default"
         xpath, text = args.split('" "')
         xpath = xpath.strip('"')
         text = text.strip('"')
@@ -68,7 +74,7 @@ class WebAutomationDSL:
             "Search": xpath,
             "By": "xpath",
             "Action": "fill",
-            "Text": [text],
+            "Text": text,
             "uid": self.uid,
         }
         response = requests.post(endpoint, json=payload)
@@ -129,7 +135,6 @@ def main():
         st.session_state.script = """
 NAVIGATE https://www.linkedin.com
 ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
-CLICK_XPATH "//button[@aria-label='Search']"
 TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
 SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
 CLICK_XPATH "//button[@aria-label='Comment']"
