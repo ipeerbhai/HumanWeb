@@ -23,7 +23,7 @@ class WebAutomationDSL:
             url = json.loads(url)
         except json.JSONDecodeError:
             pass
-        
+
         endpoint = f"{BASE_URL}/v1/connectors/browser/navigate/"
         payload = {"url": url, "uid": self.uid if self.uid else "default"}
         response = requests.post(endpoint, json=payload)
@@ -135,6 +135,12 @@ def main():
         st.session_state.script = """
 FIND_AND_SAVE "https://www.google.com/" "search input" "search bar"
 """
+    if 'current_line' not in st.session_state:
+        st.session_state.current_line = 0
+    if 'waiting_for_user' not in st.session_state:
+        st.session_state.waiting_for_user = False
+    if 'is_executing' not in st.session_state:
+        st.session_state.is_executing = False  # Add this line
 
     # Display and edit the script
     st.session_state.script = st.text_area("DSL Script", st.session_state.script, height=300)
@@ -145,31 +151,54 @@ FIND_AND_SAVE "https://www.google.com/" "search input" "search bar"
     # Execute button in the first column
     with col1:
         if st.button("Execute Script"):
-            lines = st.session_state.script.strip().split('\n')
-            for line in lines:
-                parts = line.strip().split(' ', 1)
-                command = parts[0]
-                args = parts[1] if len(parts) > 1 else ''
-                
-                if command == "ASK_USER":
-                    user_prompt = args.strip('"')
-                    user_action = st.empty()
-                    with user_action.container():
-                        st.write(user_prompt)
-                        if st.button("Confirm"):
-                            user_action.empty()
-                            st.write(f"User confirmed: {user_prompt}")
-                else:
-                    result = dsl.execute_command(command, args)
-                    st.write(result)
-                
-                time.sleep(1)
+            st.session_state.current_line = 0
+            st.session_state.waiting_for_user = False
+            st.session_state.is_executing = True  # Set executing flag
+            st.rerun()
 
     # Clear button in the second column
     with col2:
         if st.button("Clear Script"):
             st.session_state.script = ""
+            st.session_state.current_line = 0
+            st.session_state.waiting_for_user = False
+            st.session_state.is_executing = False  # Reset executing flag
             st.rerun()
+
+    # Script execution
+    if st.session_state.is_executing:
+        lines = st.session_state.script.strip().split('\n')
+        while st.session_state.current_line < len(lines):
+            line = lines[st.session_state.current_line].strip()
+            if not line:
+                st.session_state.current_line += 1
+                continue
+            parts = line.split(' ', 1)
+            command = parts[0]
+            args = parts[1] if len(parts) > 1 else ''
+
+            if command == "ASK_USER":
+                user_prompt = args.strip('"')
+                st.write(user_prompt)
+                if st.button("Confirm", key=f"confirm_{st.session_state.current_line}"):
+                    st.session_state.waiting_for_user = False
+                    st.session_state.current_line += 1
+                    st.rerun()
+                else:
+                    st.session_state.waiting_for_user = True
+                break
+            else:
+                result = dsl.execute_command(command, args)
+                st.write(result)
+                st.session_state.current_line += 1
+
+            time.sleep(1)
+
+        # Reset execution if script is completed
+        if st.session_state.current_line >= len(lines):
+            st.session_state.current_line = 0
+            st.session_state.waiting_for_user = False
+            st.session_state.is_executing = False
 
     # Define command structure
     command_structure = {
@@ -189,9 +218,9 @@ FIND_AND_SAVE "https://www.google.com/" "search input" "search bar"
     # Dynamic input fields based on selected command
     input_values = {}
     for arg in command_structure[selected_command]:
-        input_values[arg] = st.text_input(f"Enter {arg}")
+        input_values[arg] = st.text_input(f"Enter {arg}", key=f"{selected_command}_{arg}")
 
-    if st.button("Add Command"):
+    if st.button("Add Command", key="add_command"):
         if selected_command == "TYPE_XPATH":
             new_command = f'{selected_command} {json.dumps(input_values["XPath"])} {json.dumps(input_values["Text"])}'
         elif selected_command == "SAVE_TO_VARIABLE":
