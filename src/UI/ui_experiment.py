@@ -47,9 +47,15 @@ class WebAutomationDSL:
 
     def click_xpath(self, xpath):
         if not self.uid:
-            return "No active browser session. Navigate to a page first."
+            self.uid = "default"
         endpoint = f"{BASE_URL}/v1/connectors/browser/FindDo/"
-        payload = {"Search": xpath, "By": "xpath", "Action": "click", "uid": self.uid}
+        payload = {
+            "Search": xpath,
+            "By": "xpath",
+            "Action": "click",
+            "Text": "",
+            "uid": self.uid,
+        }
         response = requests.post(endpoint, json=payload)
         if response.status_code == 200:
             return f"Clicked element at {xpath}"
@@ -58,7 +64,7 @@ class WebAutomationDSL:
 
     def type_xpath(self, args):
         if not self.uid:
-            return "No active browser session. Navigate to a page first."
+            self.uid = "default"
         xpath, text = args.split('" "')
         xpath = xpath.strip('"')
         text = text.strip('"')
@@ -68,7 +74,7 @@ class WebAutomationDSL:
             "Search": xpath,
             "By": "xpath",
             "Action": "fill",
-            "Text": [text],
+            "Text": text,
             "uid": self.uid,
         }
         response = requests.post(endpoint, json=payload)
@@ -178,11 +184,13 @@ def main():
     # Initialize session state
     if "script" not in st.session_state:
         st.session_state.script = """
-NAVIGATE "https://www.example.com"
-ASK_USER "Please confirm when ready to proceed."
-CLICK_TAGGED "search_button"
-TYPE_TAGGED "search_input" "example search"
-SAVE_TO_VARIABLE result_text READ_TAGGED "search_result"
+NAVIGATE https://www.linkedin.com
+ASK_USER "Please log in to LinkedIn and click 'Confirm' when done."
+TYPE_XPATH "//input[@aria-label='Search']" "Langchain"
+SAVE_TO_VARIABLE post_content READ_XPATH "//div[@class='feed-shared-update-v2__description']"
+CLICK_XPATH "//button[@aria-label='Comment']"
+SAVE_TO_VARIABLE generated_comment GENERATE_COMMENT $post_content
+TYPE_XPATH "//div[@aria-label='Add a comment']" "$generated_comment"
 """
     if "current_line" not in st.session_state:
         st.session_state.current_line = 0

@@ -17,16 +17,19 @@ firefox_options.add_argument("--start-fullscreen")
 browsers = {}  # a dictionary holding uid -> selenium.driver instances
 selected_elements: List[Dict[str, str]] = []
 
+
 class NavigateDetails(BaseModel):
     url: str
     uid: str
+
 
 class ElementActions(BaseModel):
     Search: str
     By: str
     Action: str
-    Text: List[str] | None = []
+    Text: str
     uid: str
+
 
 class SelectedElement(BaseModel):
     element_html: str
@@ -54,10 +57,13 @@ def find_tagged_element(tagged_name: str, uid: str):
                 return browser.find_element(By.XPATH, element["html"])
     return None
 
+
+
 @app.get("/")
 def read_root():
     """Root endpoint returning a simple greeting."""
     return {"Hello": "World"}
+
 
 @app.post("/v1/connectors/browser/update_selected_element/")
 async def update_selected_element(element: SelectedElement):
@@ -71,6 +77,7 @@ async def update_selected_element(element: SelectedElement):
     selected_elements.append({"tagged_name": element.tagged_name, "html": element.element_html})
     return {"status": "success"}
 
+
 @app.get("/v1/connectors/browser/get_last_selected_element/")
 async def get_last_selected_element():
     """
@@ -82,6 +89,7 @@ async def get_last_selected_element():
         return {"element": selected_elements[-1]}
     else:
         raise HTTPException(status_code=404, detail="No element has been selected yet")
+
 
 @app.get("/v1/connectors/browser/get_all_selected_elements/")
 async def get_all_selected_elements():
@@ -106,7 +114,10 @@ async def get_element_by_name(tagged_name: str):
     for element in selected_elements:
         if element["tagged_name"] == tagged_name:
             return {"element": element}
-    raise HTTPException(status_code=404, detail=f"No element found with name: {tagged_name}")
+    raise HTTPException(
+        status_code=404, detail=f"No element found with name: {element_name}"
+    )
+
 
 @app.get("/v1/connectors/browser/clear_selected_elements/")
 async def clear_selected_elements():
@@ -145,6 +156,32 @@ async def navigate(details: NavigateDetails):
             return {"source": source}
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/v1/connectors/browser/source/{uid}")
+async def get_page_source(uid: str):
+    browser = None
+    if uid in browsers:
+        browser = browsers[uid]
+    try:
+        source = browser.page_source
+        return {"source": source}
+    except WebDriverException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/connectors/browser/screenshot/{uid}")
+async def get_screenshot(uid: str):
+    browser = None
+    if uid in browsers:
+        browser = browsers[uid]
+    try:
+        # Take the screenshot and store it in memory
+        screenshot = browser.get_screenshot_as_png()
+        return StreamingResponse(BytesIO(screenshot), media_type="image/png")
+    except WebDriverException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/v1/connectors/browser/FindDo/")
 async def find_and_do_action(element_details: ElementActions):
     """
@@ -159,13 +196,15 @@ async def find_and_do_action(element_details: ElementActions):
     try:
         field_search = None
         match element_details.By:
-            case 'id':
+            case "id":
                 field_search = By.ID
-            case 'xpath':
+            case "xpath":
                 field_search = By.XPATH
 
         field = browser.find_element(field_search, element_details.Search)
-            
+
+        # Extend for other "By" methods like name, xpath, etc.
+
         if element_details.Action == "click":
             field.click()
         elif element_details.Action == "fill":
@@ -264,6 +303,7 @@ async def get_screenshot(uid: str):
     except WebDriverException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/v1/connectors/browser/human_source/{uid}")
 async def get_human_readable_content(uid: str):
     """
@@ -277,8 +317,12 @@ async def get_human_readable_content(uid: str):
         raise HTTPException(status_code=404, detail="Browser instance not found")
     try:
         page_source = browser.page_source
-        soup = BeautifulSoup(page_source, 'html.parser')
-        for script in soup(['script', 'style', 'head']):
+
+        # Parse with BeautifulSoup
+        soup = BeautifulSoup(page_source, "html.parser")
+
+        # Remove scripts and styles, which are not visible
+        for script in soup(["script", "style", "head"]):
             script.extract()
         for comment in soup.find_all(text=lambda text: isinstance(text, Comment)):
             comment.extract()
@@ -287,6 +331,8 @@ async def get_human_readable_content(uid: str):
     except WebDriverException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8676)
