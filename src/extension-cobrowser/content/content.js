@@ -133,6 +133,7 @@ async function handleMessage(message, sender, sendResponse) {
 
       case 'command.getState':
         const state = stateCapturer.captureState(message.payload || {});
+        sendActionResult('command.getState', message.correlationId, state);
         return state;
 
       // Handoff UI
@@ -256,54 +257,57 @@ function hideHandoffNotification() {
  * Show command modal for context menu
  */
 function showCommandModal(context) {
-  // Create modal if it doesn't exist
-  let modal = document.getElementById('cobrowser-command-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'cobrowser-command-modal';
-    modal.className = 'cobrowser-modal';
-    modal.innerHTML = `
-      <div class="cobrowser-modal-content">
-        <div class="cobrowser-modal-header">
-          <span>Ask Claude</span>
-          <button class="cobrowser-modal-close">&times;</button>
-        </div>
-        <div class="cobrowser-modal-body">
-          <textarea id="cobrowser-command-input" placeholder="What would you like Claude to do?"></textarea>
-          <div class="cobrowser-modal-context"></div>
-        </div>
-        <div class="cobrowser-modal-footer">
-          <button id="cobrowser-command-submit" class="cobrowser-btn cobrowser-btn-primary">Send</button>
-          <button id="cobrowser-command-cancel" class="cobrowser-btn">Cancel</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-
-    // Add event listeners
-    modal.querySelector('.cobrowser-modal-close').addEventListener('click', () => {
-      modal.style.display = 'none';
-    });
-    modal.querySelector('#cobrowser-command-cancel').addEventListener('click', () => {
-      modal.style.display = 'none';
-    });
-    modal.querySelector('#cobrowser-command-submit').addEventListener('click', () => {
-      const input = document.getElementById('cobrowser-command-input');
-      if (input.value.trim()) {
-        browser.runtime.sendMessage({
-          type: 'command.natural',
-          text: input.value,
-          context: {
-            url: window.location.href,
-            title: document.title,
-            selection: context.selectionText
-          }
-        });
-        modal.style.display = 'none';
-        input.value = '';
-      }
-    });
+  // Remove existing modal to ensure clean state with event listeners
+  let existingModal = document.getElementById('cobrowser-command-modal');
+  if (existingModal) {
+    existingModal.remove();
   }
+
+  // Create fresh modal
+  const modal = document.createElement('div');
+  modal.id = 'cobrowser-command-modal';
+  modal.className = 'cobrowser-modal';
+  modal.innerHTML = `
+    <div class="cobrowser-modal-content">
+      <div class="cobrowser-modal-header">
+        <span>Ask Claude</span>
+        <button class="cobrowser-modal-close">&times;</button>
+      </div>
+      <div class="cobrowser-modal-body">
+        <textarea id="cobrowser-command-input" placeholder="What would you like Claude to do?"></textarea>
+        <div class="cobrowser-modal-context"></div>
+      </div>
+      <div class="cobrowser-modal-footer">
+        <button id="cobrowser-command-submit" class="cobrowser-btn cobrowser-btn-primary">Send</button>
+        <button id="cobrowser-command-cancel" class="cobrowser-btn">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // Add event listeners
+  modal.querySelector('.cobrowser-modal-close').addEventListener('click', () => {
+    modal.style.display = 'none';
+  });
+  modal.querySelector('#cobrowser-command-cancel').addEventListener('click', () => {
+    modal.style.display = 'none';
+  });
+  modal.querySelector('#cobrowser-command-submit').addEventListener('click', () => {
+    const input = document.getElementById('cobrowser-command-input');
+    if (input.value.trim()) {
+      browser.runtime.sendMessage({
+        type: 'command.natural',
+        text: input.value,
+        context: {
+          url: window.location.href,
+          title: document.title,
+          selection: context.selectionText
+        }
+      });
+      modal.style.display = 'none';
+      input.value = '';
+    }
+  });
 
   // Update context display
   const contextEl = modal.querySelector('.cobrowser-modal-context');

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cobrowser": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "src.Library.cobrowser_mcp_server"],
+      "env": {}
+    }
+  }
+}

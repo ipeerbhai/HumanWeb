@@ -290,6 +290,21 @@ async function handleContentScriptMessage(message, sender) {
       }
       return { success: true, mode: 'CLAUDE' };
 
+    case 'command.natural':
+      // Natural language command from context menu
+      if (currentSessionId) {
+        console.log('[Co-Browser] Natural command:', message.text);
+        wsManager.send({
+          type: 'command.natural',
+          session_id: currentSessionId,
+          payload: {
+            text: message.text,
+            context: message.context
+          }
+        });
+      }
+      return { success: true };
+
     default:
       console.warn('[Co-Browser] Unknown message type:', message.type);
       return { success: false, error: 'Unknown message type' };

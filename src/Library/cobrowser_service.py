@@ -46,6 +46,7 @@ class Session:
     created_at: float = field(default_factory=time.time)
     state: Dict[str, Any] = field(default_factory=dict)
     command_queue: List[Dict] = field(default_factory=list)
+    user_requests: List[Dict] = field(default_factory=list)  # Natural language requests from user
 
 
 # ============================================
@@ -87,6 +88,8 @@ class CoBrowserService:
         self.sessions: Dict[str, Session] = {}
         # Track session history for tests
         self.session_history: set = set()
+        # Pending command responses: message_id -> (Future, result)
+        self.pending_responses: Dict[str, asyncio.Future] = {}
 
     def create_session(self) -> Dict[str, Any]:
         """Create a new co-browsing session."""
@@ -211,6 +214,7 @@ class CoBrowserService:
         """Process an incoming message and return a response."""
         msg_type = message.get("type", "")
         msg_id = message.get("id", "")
+        correlation_id = message.get("correlation_id", "")
 
         # Handle heartbeat
         if msg_type == "heartbeat":
@@ -218,6 +222,36 @@ class CoBrowserService:
                 msg_type="heartbeat.ack",
                 session_id=session_id,
                 payload={},
+                correlation_id=msg_id
+            )
+
+        # Handle command results from the extension
+        if msg_type.endswith(".result"):
+            if correlation_id and correlation_id in self.pending_responses:
+                future = self.pending_responses.pop(correlation_id)
+                if not future.done():
+                    future.set_result(message)
+            return None  # No response needed for results
+
+        # Handle state updates from the extension
+        if msg_type == "state.update":
+            self.update_session_state(session_id, message.get("payload", {}))
+            return None
+
+        # Handle natural language commands from the user
+        if msg_type == "command.natural":
+            session = self.sessions.get(session_id)
+            if session:
+                session.user_requests.append({
+                    "id": msg_id,
+                    "text": message.get("payload", {}).get("text", ""),
+                    "context": message.get("payload", {}).get("context", {}),
+                    "timestamp": time.time()
+                })
+            return create_message(
+                msg_type="command.natural.ack",
+                session_id=session_id,
+                payload={"status": "received"},
                 correlation_id=msg_id
             )
 
@@ -259,6 +293,45 @@ class CoBrowserService:
             # Queue command for later delivery
             self.queue_command(session_id, message)
             return message["id"]
+
+    async def send_command_and_wait(
+        self,
+        session_id: str,
+        command_type: str,
+        payload: Dict[str, Any],
+        timeout: float = 30.0
+    ) -> Dict[str, Any]:
+        """Send a command and wait for the response."""
+        message = create_message(
+            msg_type=command_type,
+            session_id=session_id,
+            payload=payload
+        )
+        message_id = message["id"]
+
+        websocket = self.active_sessions.get(session_id)
+        if not websocket:
+            return {"success": False, "error": "No active connection"}
+
+        # Create a future to wait for the response
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+        self.pending_responses[message_id] = future
+
+        try:
+            await websocket.send_json(message)
+            result = await asyncio.wait_for(future, timeout=timeout)
+            return {
+                "success": True,
+                "result": result.get("payload", {}),
+                "message_type": result.get("type", "")
+            }
+        except asyncio.TimeoutError:
+            self.pending_responses.pop(message_id, None)
+            return {"success": False, "error": "Command timed out"}
+        except Exception as e:
+            self.pending_responses.pop(message_id, None)
+            return {"success": False, "error": str(e)}
 
 
 # ============================================
@@ -333,6 +406,42 @@ async def send_command(session_id: str, command: Dict[str, Any]):
         "message_id": message_id,
         "queued": session_id not in service.active_sessions
     }
+
+
+@app.post("/v1/cobrowser/command/{session_id}/sync")
+async def send_command_sync(session_id: str, command: Dict[str, Any]):
+    """Send a command and wait for the response."""
+    command_type = command.get("type", "command.unknown")
+    payload = command.get("payload", {})
+    timeout = command.get("timeout", 30.0)
+
+    result = await service.send_command_and_wait(
+        session_id, command_type, payload, timeout
+    )
+
+    return result
+
+
+@app.get("/v1/cobrowser/user-requests")
+def get_user_requests():
+    """Get pending user requests from all active sessions."""
+    requests = []
+    for session_id, session in service.sessions.items():
+        if session_id in service.active_sessions:
+            for req in session.user_requests:
+                requests.append({
+                    "session_id": session_id,
+                    **req
+                })
+    return {"requests": requests, "count": len(requests)}
+
+
+@app.delete("/v1/cobrowser/user-requests/{request_id}")
+def clear_user_request(request_id: str):
+    """Clear a specific user request after processing."""
+    for session in service.sessions.values():
+        session.user_requests = [r for r in session.user_requests if r.get("id") != request_id]
+    return {"success": True}
 
 
 if __name__ == "__main__":
