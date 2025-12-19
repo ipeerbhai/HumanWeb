@@ -1,0 +1,272 @@
+/**
+ * Co-Browser Extension - Overlay Styles
+ */
+
+/* Reset for extension elements */
+#cobrowser-overlay,
+#cobrowser-overlay * {
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  line-height: 1.4;
+}
+
+/* Main container */
+#cobrowser-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+/* Mode Indicator */
+.cobrowser-indicator {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 24px;
+  font-size: 16px;
+  font-weight: 600;
+  color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  pointer-events: auto;
+  cursor: default;
+  transition: all 0.2s ease;
+  z-index: 2147483647;
+}
+
+.cobrowser-indicator:hover {
+  transform: scale(1.05);
+}
+
+.cobrowser-mode-icon {
+  font-size: 18px;
+}
+
+.cobrowser-mode-claude {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+}
+
+.cobrowser-mode-human {
+  background: linear-gradient(135deg, #10b981, #059669);
+}
+
+.cobrowser-mode-shared {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+}
+
+.cobrowser-mode-disconnected {
+  background: linear-gradient(135deg, #6b7280, #4b5563);
+}
+
+/* Action Overlay */
+.cobrowser-action {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 40px;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  border-radius: 12px;
+  font-size: 20px;
+  font-weight: 500;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+.cobrowser-action::before {
+  content: '';
+  width: 24px;
+  height: 24px;
+  margin-right: 14px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: cobrowser-spin 0.8s linear infinite;
+}
+
+@keyframes cobrowser-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Handoff Notification */
+.cobrowser-handoff {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  pointer-events: auto;
+  z-index: 2147483647;
+}
+
+.cobrowser-handoff-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 28px 40px;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  border: 2px solid #10b981;
+  max-width: 450px;
+  text-align: center;
+}
+
+.cobrowser-handoff-icon {
+  font-size: 40px;
+}
+
+.cobrowser-handoff-message {
+  font-size: 18px;
+  color: #374151;
+}
+
+/* Buttons */
+.cobrowser-btn {
+  padding: 14px 28px;
+  border: none;
+  border-radius: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cobrowser-btn:hover {
+  transform: translateY(-1px);
+}
+
+.cobrowser-btn-primary {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+}
+
+.cobrowser-btn-primary:hover {
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+#cobrowser-resume-btn {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+}
+
+#cobrowser-resume-btn:hover {
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+}
+
+/* Command Modal */
+.cobrowser-modal,
+.cobrowser-modal * {
+  box-sizing: border-box;
+}
+
+.cobrowser-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  z-index: 2147483647;
+}
+
+.cobrowser-modal-content {
+  width: 90%;
+  max-width: 500px;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.cobrowser-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.cobrowser-modal-close {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 28px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.cobrowser-modal-body {
+  padding: 24px;
+}
+
+#cobrowser-command-input {
+  width: 100%;
+  min-height: 120px;
+  padding: 14px;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 16px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+#cobrowser-command-input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.cobrowser-modal-context {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  font-size: 15px;
+  color: #6b7280;
+}
+
+.cobrowser-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 20px 24px;
+  border-top: 1px solid #e5e7eb;
+}
+
+/* Element highlight */
+.cobrowser-highlight,
+[data-cobrowser-highlight="true"] {
+  outline: 3px solid #4CAF50 !important;
+  outline-offset: 2px;
+}
+
+/* Animation for highlighting */
+@keyframes cobrowser-pulse {
+  0%, 100% { outline-color: #4CAF50; }
+  50% { outline-color: #81C784; }
+}
+
+.cobrowser-highlight-pulse {
+  animation: cobrowser-pulse 0.5s ease-in-out 2;
+}

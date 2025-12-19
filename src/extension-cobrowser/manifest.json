@@ -1,0 +1,83 @@
+{
+  "manifest_version": 2,
+  "name": "Co-Browser",
+  "version": "0.1.0",
+  "description": "Enables Claude to browse the web collaboratively with you",
+
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "contextMenus",
+    "<all_urls>"
+  ],
+
+  "background": {
+    "scripts": [
+      "background/websocket-manager.js",
+      "background/session-manager.js",
+      "background/message-router.js",
+      "background/background.js"
+    ],
+    "persistent": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "content/state-capturer.js",
+        "content/action-executor.js",
+        "content/dom-observer.js",
+        "content/overlay.js",
+        "content/content.js"
+      ],
+      "css": ["styles/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "browser_action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.svg",
+      "48": "icons/icon-48.svg",
+      "96": "icons/icon-96.svg"
+    }
+  },
+
+  "options_ui": {
+    "page": "options/options.html",
+    "browser_style": true
+  },
+
+  "icons": {
+    "16": "icons/icon-16.svg",
+    "48": "icons/icon-48.svg",
+    "96": "icons/icon-96.svg"
+  },
+
+  "commands": {
+    "toggle-control": {
+      "suggested_key": {
+        "default": "Alt+Shift+T",
+        "linux": "Ctrl+Shift+Period"
+      },
+      "description": "Toggle control between Claude and Human"
+    },
+    "resume-automation": {
+      "suggested_key": {
+        "default": "Alt+Shift+R",
+        "linux": "Ctrl+Shift+Comma"
+      },
+      "description": "Resume Claude automation"
+    },
+    "emergency-stop": {
+      "suggested_key": {
+        "default": "Alt+Shift+P",
+        "linux": "F8"
+      },
+      "description": "Emergency stop - pause all automation"
+    }
+  }
+}

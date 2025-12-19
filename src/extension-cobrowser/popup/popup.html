@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Co-Browser</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 16px;
+      background: #f9fafb;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .header p {
+      font-size: 16px;
+      opacity: 0.9;
+    }
+
+    .status {
+      padding: 20px;
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .status-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .status-label {
+      font-size: 16px;
+      color: #6b7280;
+    }
+
+    .status-value {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .status-connected {
+      color: #10b981;
+    }
+
+    .status-disconnected {
+      color: #ef4444;
+    }
+
+    .mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .mode-claude {
+      background: #ede9fe;
+      color: #6366f1;
+    }
+
+    .mode-human {
+      background: #d1fae5;
+      color: #059669;
+    }
+
+    .mode-shared {
+      background: #fef3c7;
+      color: #d97706;
+    }
+
+    .actions {
+      padding: 20px;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: 10px;
+    }
+
+    .btn:last-child {
+      margin-bottom: 0;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn-secondary {
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    .btn-danger {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+
+    .settings {
+      padding: 16px 20px;
+      border-top: 1px solid #e5e7eb;
+      background: white;
+    }
+
+    .settings a {
+      font-size: 15px;
+      color: #6b7280;
+      text-decoration: none;
+    }
+
+    .settings a:hover {
+      color: #6366f1;
+    }
+
+    .input-group {
+      margin-bottom: 14px;
+    }
+
+    .input-group label {
+      display: block;
+      font-size: 15px;
+      color: #6b7280;
+      margin-bottom: 6px;
+    }
+
+    .input-group input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 15px;
+    }
+
+    .input-group input:focus {
+      outline: none;
+      border-color: #6366f1;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🤖 Co-Browser</h1>
+    <p>Browse with Claude</p>
+  </div>
+
+  <div class="status">
+    <div class="status-row">
+      <span class="status-label">Connection</span>
+      <span id="connection-status" class="status-value status-disconnected">Disconnected</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Control Mode</span>
+      <span id="control-mode" class="mode-badge mode-claude">🤖 AI</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Session</span>
+      <span id="session-id" class="status-value" style="font-size: 14px; color: #9ca3af;">—</span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <div class="input-group" id="url-group" style="display: none;">
+      <label>Service URL</label>
+      <input type="text" id="service-url" value="ws://localhost:8677" placeholder="ws://localhost:8677">
+    </div>
+
+    <button id="connect-btn" class="btn btn-primary">Connect</button>
+    <button id="disconnect-btn" class="btn btn-secondary" style="display: none;">Disconnect</button>
+    <button id="toggle-mode-btn" class="btn btn-secondary" style="display: none;">Switch to Human Control</button>
+  </div>
+
+  <div class="settings">
+    <a href="#" id="options-link">⚙️ Settings</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
