@@ -108,6 +108,27 @@ async function handleMessage(message, sender, sendResponse) {
         sendActionResult('command.click', message.correlationId, clickResult);
         return clickResult;
 
+      case 'command.doubleclick':
+        showActionOverlay('Double-clicking...');
+        const dblClickResult = await actionExecutor.doubleClick(message.payload);
+        hideActionOverlay();
+        sendActionResult('command.doubleclick', message.correlationId, dblClickResult);
+        return dblClickResult;
+
+      case 'command.rightclick':
+        showActionOverlay('Right-clicking...');
+        const rightClickResult = await actionExecutor.rightClick(message.payload);
+        hideActionOverlay();
+        sendActionResult('command.rightclick', message.correlationId, rightClickResult);
+        return rightClickResult;
+
+      case 'command.drag':
+        showActionOverlay('Dragging...');
+        const dragResult = await actionExecutor.drag(message.payload);
+        hideActionOverlay();
+        sendActionResult('command.drag', message.correlationId, dragResult);
+        return dragResult;
+
       case 'command.type':
         showActionOverlay('Typing...');
         const typeResult = await actionExecutor.type(message.payload);

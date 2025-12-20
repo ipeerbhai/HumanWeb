@@ -97,13 +97,91 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="cobrowser_click",
-            description="Click an element on the page using a CSS selector.",
+            description="Click an element on the page using a CSS selector or coordinates.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "selector": {
                         "type": "string",
                         "description": "CSS selector for the element to click"
+                    },
+                    "x": {
+                        "type": "number",
+                        "description": "X coordinate (viewport) - use with y for canvas elements"
+                    },
+                    "y": {
+                        "type": "number",
+                        "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="cobrowser_doubleclick",
+            description="Double-click an element on the page. Use for opening dialogs, search boxes in canvas UIs like ComfyUI. For canvas elements, use x,y coordinates.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element to double-click"
+                    },
+                    "x": {
+                        "type": "number",
+                        "description": "X coordinate (viewport) - use with y for canvas elements"
+                    },
+                    "y": {
+                        "type": "number",
+                        "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="cobrowser_rightclick",
+            description="Right-click an element to open a context menu. For canvas elements, use x,y coordinates.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element to right-click"
+                    },
+                    "x": {
+                        "type": "number",
+                        "description": "X coordinate (viewport) - use with y for canvas elements"
+                    },
+                    "y": {
+                        "type": "number",
+                        "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="cobrowser_drag",
+            description="Drag an element from one location to another. Use for connecting nodes in canvas UIs, moving elements, or drag-and-drop operations.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the source element to drag"
+                    },
+                    "targetSelector": {
+                        "type": "string",
+                        "description": "CSS selector for the target element to drop on"
+                    },
+                    "targetX": {
+                        "type": "number",
+                        "description": "Target X coordinate (alternative to targetSelector)"
+                    },
+                    "targetY": {
+                        "type": "number",
+                        "description": "Target Y coordinate (alternative to targetSelector)"
                     }
                 },
                 "required": ["selector"]
@@ -242,11 +320,77 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "cobrowser_click":
         selector = arguments.get("selector")
+        x = arguments.get("x")
+        y = arguments.get("y")
+
+        if not selector and (x is None or y is None):
+            return [TextContent(type="text", text="Error: selector or x,y coordinates are required")]
+
+        payload = {}
+        if selector:
+            payload["selector"] = selector
+        if x is not None and y is not None:
+            payload["x"] = x
+            payload["y"] = y
+
+        result = await send_command("command.click", payload)
+        target = selector if selector else f"({x}, {y})"
+        return format_result(result, f"Clicked element: {target}")
+
+    elif name == "cobrowser_doubleclick":
+        selector = arguments.get("selector")
+        x = arguments.get("x")
+        y = arguments.get("y")
+
+        if not selector and (x is None or y is None):
+            return [TextContent(type="text", text="Error: selector or x,y coordinates are required")]
+
+        payload = {}
+        if selector:
+            payload["selector"] = selector
+        if x is not None and y is not None:
+            payload["x"] = x
+            payload["y"] = y
+
+        result = await send_command("command.doubleclick", payload)
+        target = selector if selector else f"({x}, {y})"
+        return format_result(result, f"Double-clicked element: {target}")
+
+    elif name == "cobrowser_rightclick":
+        selector = arguments.get("selector")
+        x = arguments.get("x")
+        y = arguments.get("y")
+
+        if not selector and (x is None or y is None):
+            return [TextContent(type="text", text="Error: selector or x,y coordinates are required")]
+
+        payload = {}
+        if selector:
+            payload["selector"] = selector
+        if x is not None and y is not None:
+            payload["x"] = x
+            payload["y"] = y
+
+        result = await send_command("command.rightclick", payload)
+        target = selector if selector else f"({x}, {y})"
+        return format_result(result, f"Right-clicked element: {target}")
+
+    elif name == "cobrowser_drag":
+        selector = arguments.get("selector")
         if not selector:
             return [TextContent(type="text", text="Error: selector is required")]
 
-        result = await send_command("command.click", {"selector": selector})
-        return format_result(result, f"Clicked element: {selector}")
+        payload = {"selector": selector}
+        if arguments.get("targetSelector"):
+            payload["targetSelector"] = arguments["targetSelector"]
+        if arguments.get("targetX") is not None:
+            payload["targetX"] = arguments["targetX"]
+        if arguments.get("targetY") is not None:
+            payload["targetY"] = arguments["targetY"]
+
+        result = await send_command("command.drag", payload)
+        target_desc = arguments.get("targetSelector") or f"({arguments.get('targetX')}, {arguments.get('targetY')})"
+        return format_result(result, f"Dragged {selector} to {target_desc}")
 
     elif name == "cobrowser_type":
         selector = arguments.get("selector")

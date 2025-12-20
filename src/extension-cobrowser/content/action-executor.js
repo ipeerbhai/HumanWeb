@@ -123,8 +123,10 @@ class ActionExecutor {
         };
       }
 
-      // Scroll into view
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Scroll into view (skip for coordinate-based clicks on canvas)
+      if (!options.x && !options.y) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
 
       // Highlight if requested
       if (options.highlight) {
@@ -134,14 +136,356 @@ class ActionExecutor {
       // Small delay to allow scroll animation
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Perform click
-      element.click();
+      // Get click coordinates - use provided x,y or element center
+      let clientX, clientY;
+      if (options.x !== undefined && options.y !== undefined) {
+        clientX = options.x;
+        clientY = options.y;
+      } else {
+        const rect = element.getBoundingClientRect();
+        clientX = rect.left + rect.width / 2;
+        clientY = rect.top + rect.height / 2;
+      }
+
+      // Dispatch proper mouse events for canvas compatibility
+      const mousedownEvent = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 0
+      });
+      element.dispatchEvent(mousedownEvent);
+
+      const mouseupEvent = new MouseEvent('mouseup', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 0
+      });
+      element.dispatchEvent(mouseupEvent);
+
+      const clickEvent = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 0
+      });
+      element.dispatchEvent(clickEvent);
 
       return { success: true };
     } catch (error) {
       return {
         success: false,
         error: `Click failed: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Execute a double-click action
+   * @param {object} options - { selector, xpath, x, y, highlight }
+   * @returns {Promise<object>} - { success, error }
+   */
+  async doubleClick(options) {
+    try {
+      const element = this.findElement(options);
+
+      if (!element) {
+        return {
+          success: false,
+          error: `Element not found: ${options.selector || options.xpath || `(${options.x}, ${options.y})`}`
+        };
+      }
+
+      // Security check
+      if (this.isPasswordField(element)) {
+        return {
+          success: false,
+          error: 'Cannot double-click on password fields for security reasons'
+        };
+      }
+
+      // Scroll into view (skip for coordinate-based clicks on canvas)
+      if (!options.x && !options.y) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      // Highlight if requested
+      if (options.highlight) {
+        this.highlightElement(element);
+      }
+
+      // Small delay to allow scroll animation
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Get click coordinates - use provided x,y or element center
+      let clientX, clientY;
+      if (options.x !== undefined && options.y !== undefined) {
+        clientX = options.x;
+        clientY = options.y;
+      } else {
+        const rect = element.getBoundingClientRect();
+        clientX = rect.left + rect.width / 2;
+        clientY = rect.top + rect.height / 2;
+      }
+
+      // Dispatch full event sequence for canvas compatibility (both Pointer and Mouse events)
+      const pointerOpts = {
+        bubbles: true, cancelable: true, view: window, clientX, clientY,
+        button: 0, buttons: 1, pointerType: 'mouse', isPrimary: true, pointerId: 1
+      };
+
+      // First click - Pointer events
+      element.dispatchEvent(new PointerEvent('pointerdown', { ...pointerOpts, detail: 1 }));
+      element.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
+      }));
+      element.dispatchEvent(new PointerEvent('pointerup', { ...pointerOpts, buttons: 0, detail: 1 }));
+      element.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
+      }));
+      element.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
+      }));
+
+      // Small delay between clicks
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Second click - Pointer events
+      element.dispatchEvent(new PointerEvent('pointerdown', { ...pointerOpts, detail: 2 }));
+      element.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+      }));
+      element.dispatchEvent(new PointerEvent('pointerup', { ...pointerOpts, buttons: 0, detail: 2 }));
+      element.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+      }));
+      element.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+      }));
+
+      // Finally dispatch dblclick
+      element.dispatchEvent(new MouseEvent('dblclick', {
+        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+      }));
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Double-click failed: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Execute a right-click (context menu) action
+   * @param {object} options - { selector, xpath, x, y, highlight }
+   * @returns {Promise<object>} - { success, error }
+   */
+  async rightClick(options) {
+    try {
+      const element = this.findElement(options);
+
+      if (!element) {
+        return {
+          success: false,
+          error: `Element not found: ${options.selector || options.xpath || `(${options.x}, ${options.y})`}`
+        };
+      }
+
+      // Security check
+      if (this.isPasswordField(element)) {
+        return {
+          success: false,
+          error: 'Cannot right-click on password fields for security reasons'
+        };
+      }
+
+      // Scroll into view (skip for coordinate-based clicks on canvas)
+      if (!options.x && !options.y) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      // Highlight if requested
+      if (options.highlight) {
+        this.highlightElement(element);
+      }
+
+      // Small delay to allow scroll animation
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Get click coordinates - use provided x,y or element center
+      let clientX, clientY;
+      if (options.x !== undefined && options.y !== undefined) {
+        clientX = options.x;
+        clientY = options.y;
+      } else {
+        const rect = element.getBoundingClientRect();
+        clientX = rect.left + rect.width / 2;
+        clientY = rect.top + rect.height / 2;
+      }
+
+      // Dispatch mousedown with right button first for canvas compatibility
+      element.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 2,
+        buttons: 2
+      }));
+
+      // Dispatch contextmenu event
+      element.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 2
+      }));
+
+      // Dispatch mouseup
+      element.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 2
+      }));
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Right-click failed: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Execute a drag action (mousedown -> mousemove -> mouseup)
+   * @param {object} options - { selector, targetSelector, targetX, targetY, highlight }
+   * @returns {Promise<object>} - { success, error }
+   */
+  async drag(options) {
+    try {
+      const sourceElement = this.findElement(options);
+
+      if (!sourceElement) {
+        return {
+          success: false,
+          error: `Source element not found: ${options.selector || options.xpath}`
+        };
+      }
+
+      // Security check
+      if (this.isPasswordField(sourceElement)) {
+        return {
+          success: false,
+          error: 'Cannot drag password fields for security reasons'
+        };
+      }
+
+      // Get source position
+      const sourceRect = sourceElement.getBoundingClientRect();
+      const startX = sourceRect.left + sourceRect.width / 2;
+      const startY = sourceRect.top + sourceRect.height / 2;
+
+      // Determine target position
+      let endX, endY, targetElement;
+      if (options.targetSelector) {
+        targetElement = document.querySelector(options.targetSelector);
+        if (!targetElement) {
+          return {
+            success: false,
+            error: `Target element not found: ${options.targetSelector}`
+          };
+        }
+        const targetRect = targetElement.getBoundingClientRect();
+        endX = targetRect.left + targetRect.width / 2;
+        endY = targetRect.top + targetRect.height / 2;
+      } else if (options.targetX !== undefined && options.targetY !== undefined) {
+        endX = options.targetX;
+        endY = options.targetY;
+        targetElement = document.elementFromPoint(endX, endY);
+      } else {
+        return {
+          success: false,
+          error: 'Target not specified. Provide targetSelector or targetX/targetY'
+        };
+      }
+
+      // Scroll source into view
+      sourceElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Highlight if requested
+      if (options.highlight) {
+        this.highlightElement(sourceElement);
+      }
+
+      // Small delay to allow scroll
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Dispatch mousedown on source
+      const mousedownEvent = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: startX,
+        clientY: startY,
+        button: 0
+      });
+      sourceElement.dispatchEvent(mousedownEvent);
+
+      // Small delay between events
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Dispatch mousemove events (interpolate for smoother drag)
+      const steps = 5;
+      for (let i = 1; i <= steps; i++) {
+        const progress = i / steps;
+        const currentX = startX + (endX - startX) * progress;
+        const currentY = startY + (endY - startY) * progress;
+
+        const mousemoveEvent = new MouseEvent('mousemove', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: currentX,
+          clientY: currentY,
+          button: 0
+        });
+        document.dispatchEvent(mousemoveEvent);
+
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+
+      // Dispatch mouseup at target
+      const mouseupEvent = new MouseEvent('mouseup', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: endX,
+        clientY: endY,
+        button: 0
+      });
+      (targetElement || document).dispatchEvent(mouseupEvent);
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Drag failed: ${error.message}`
       };
     }
   }
@@ -310,7 +654,7 @@ class ActionExecutor {
 
   /**
    * Execute an action by type
-   * @param {string} actionType - click, type, scroll, read
+   * @param {string} actionType - click, doubleclick, rightclick, drag, type, scroll, read
    * @param {object} options - Action-specific options
    * @returns {Promise<object>}
    */
@@ -318,6 +662,12 @@ class ActionExecutor {
     switch (actionType) {
       case 'click':
         return this.click(options);
+      case 'doubleclick':
+        return this.doubleClick(options);
+      case 'rightclick':
+        return this.rightClick(options);
+      case 'drag':
+        return this.drag(options);
       case 'type':
         return this.type(options);
       case 'scroll':
