@@ -148,6 +148,11 @@ async function handleMessage(message, sender, sendResponse) {
         sendActionResult('command.read', message.correlationId, readResult);
         return readResult;
 
+      case 'command.queryAll':
+        const queryResult = await actionExecutor.queryAll(message.payload);
+        sendActionResult('command.queryAll', message.correlationId, queryResult);
+        return queryResult;
+
       case 'command.screenshot':
         // Screenshot is handled by background script
         return { success: true };

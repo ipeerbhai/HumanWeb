@@ -224,6 +224,24 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="cobrowser_query_all",
+            description="Query all elements matching a selector. Returns count and info about each element including attributes, classes, and text. Useful for finding form fields, list items, or understanding page structure.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector to match elements"
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of elements to return (default: 20, max: 50)"
+                    }
+                },
+                "required": ["selector"]
+            }
+        ),
+        Tool(
             name="cobrowser_scroll",
             description="Scroll the page up or down.",
             inputSchema={
@@ -417,6 +435,51 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             text = result["result"]["text"]
             return [TextContent(type="text", text=f"Text content from {selector}:\n\n{text}")]
         return format_result(result, f"Read from {selector}")
+
+    elif name == "cobrowser_query_all":
+        selector = arguments.get("selector")
+        if not selector:
+            return [TextContent(type="text", text="Error: selector is required")]
+
+        limit = min(arguments.get("limit", 20), 50)
+
+        result = await send_command("command.queryAll", {
+            "selector": selector,
+            "limit": limit
+        })
+
+        if result.get("success"):
+            data = result.get("result", result)  # Result may be nested under "result"
+            count = data.get("count", 0)
+            total = data.get("total", count)
+            elements = data.get("elements", [])
+
+            lines = [f"Found {len(elements)} elements (of {total} total matching '{selector}'):\n"]
+            for el in elements:
+                el_info = f"[{el.get('index')}] <{el.get('tagName')}"
+                if el.get('id'):
+                    el_info += f" id=\"{el['id']}\""
+                if el.get('class'):
+                    classes = el['class'][:50]
+                    el_info += f" class=\"{classes}{'...' if len(el['class']) > 50 else ''}\""
+                if el.get('name'):
+                    el_info += f" name=\"{el['name']}\""
+                if el.get('type'):
+                    el_info += f" type=\"{el['type']}\""
+                el_info += ">"
+
+                text = el.get('text', '')
+                if text:
+                    el_info += f" \"{text[:40]}{'...' if len(text) > 40 else ''}\""
+
+                if el.get('selector'):
+                    el_info += f"\n    → {el['selector']}"
+
+                lines.append(el_info)
+
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        return format_result(result, f"Query all: {selector}")
 
     elif name == "cobrowser_scroll":
         direction = arguments.get("direction", "down")

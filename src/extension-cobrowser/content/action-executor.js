@@ -52,6 +52,38 @@ class ActionExecutor {
   }
 
   /**
+   * Find all elements by selector or XPath
+   * @param {object} options - { selector, xpath, limit }
+   * @returns {Element[]}
+   */
+  findAllElements(options) {
+    const limit = options.limit || 50;  // Default max 50 elements
+
+    if (options.selector) {
+      const elements = document.querySelectorAll(options.selector);
+      return Array.from(elements).slice(0, limit);
+    }
+
+    if (options.xpath) {
+      const result = document.evaluate(
+        options.xpath,
+        document,
+        null,
+        XPathResult.ORDERED_NODE_ITERATOR_TYPE,
+        null
+      );
+      const elements = [];
+      let node;
+      while ((node = result.iterateNext()) && elements.length < limit) {
+        elements.push(node);
+      }
+      return elements;
+    }
+
+    return [];
+  }
+
+  /**
    * Check if an element is a password field
    * @param {Element} element
    * @returns {boolean}
@@ -653,6 +685,78 @@ class ActionExecutor {
   }
 
   /**
+   * Query all matching elements and return their info
+   * @param {object} options - { selector, xpath, limit, attributes }
+   * @returns {Promise<object>} - { success, count, elements, error }
+   */
+  async queryAll(options) {
+    try {
+      const elements = this.findAllElements(options);
+      const attributes = options.attributes || ['id', 'class', 'name', 'type', 'href', 'value'];
+
+      const elementInfos = elements.map((el, index) => {
+        const info = {
+          index,
+          tagName: el.tagName.toLowerCase(),
+          text: (el.textContent || '').trim().substring(0, 100),  // First 100 chars
+        };
+
+        // Add requested attributes
+        for (const attr of attributes) {
+          if (attr === 'value' && this.isPasswordField(el)) {
+            info[attr] = '[REDACTED]';
+          } else if (el.hasAttribute && el.hasAttribute(attr)) {
+            info[attr] = el.getAttribute(attr);
+          } else if (el[attr] !== undefined && typeof el[attr] !== 'function') {
+            info[attr] = String(el[attr]);
+          }
+        }
+
+        // Generate a unique selector for this element
+        info.selector = this.generateSelector(el);
+
+        return info;
+      });
+
+      return {
+        success: true,
+        count: elements.length,
+        total: options.selector ? document.querySelectorAll(options.selector).length : elements.length,
+        elements: elementInfos
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Query failed: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Generate a unique CSS selector for an element
+   * @param {Element} el
+   * @returns {string}
+   */
+  generateSelector(el) {
+    if (el.id) {
+      return `#${el.id}`;
+    }
+
+    // Try nth-of-type
+    const parent = el.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children).filter(
+        child => child.tagName === el.tagName
+      );
+      const index = siblings.indexOf(el) + 1;
+      const parentSelector = parent.id ? `#${parent.id}` : parent.tagName.toLowerCase();
+      return `${parentSelector} > ${el.tagName.toLowerCase()}:nth-of-type(${index})`;
+    }
+
+    return el.tagName.toLowerCase();
+  }
+
+  /**
    * Execute an action by type
    * @param {string} actionType - click, doubleclick, rightclick, drag, type, scroll, read
    * @param {object} options - Action-specific options
@@ -674,6 +778,8 @@ class ActionExecutor {
         return this.scroll(options);
       case 'read':
         return this.read(options);
+      case 'queryAll':
+        return this.queryAll(options);
       default:
         return {
           success: false,
