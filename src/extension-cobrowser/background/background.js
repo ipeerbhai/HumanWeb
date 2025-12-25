@@ -107,7 +107,7 @@ function setupRouterHandlers() {
     // Show notification to user
     browser.notifications.create({
       type: 'basic',
-      iconUrl: browser.runtime.getURL('icons/icon-48.png'),
+      iconUrl: browser.runtime.getURL('icons/icon-48.svg'),
       title: 'Co-Browser: Your Help Needed',
       message: event.message || `Claude needs your help: ${event.reason}`
     });
@@ -135,7 +135,7 @@ function setupRouterHandlers() {
     // Show urgent notification
     browser.notifications.create({
       type: 'basic',
-      iconUrl: browser.runtime.getURL('icons/icon-48.png'),
+      iconUrl: browser.runtime.getURL('icons/icon-48.svg'),
       title: 'Co-Browser: Immediate Help Needed',
       message: `Claude detected: ${event.reason}. Please take over.`,
       priority: 2
