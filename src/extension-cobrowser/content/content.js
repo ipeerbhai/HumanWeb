@@ -234,8 +234,9 @@ function updateModeIndicator(mode) {
  */
 function showActionOverlay(text) {
   const overlay = document.getElementById('cobrowser-action-overlay');
+  if (!overlay) return;  // Guard clause - exit early if overlay doesn't exist
   const textEl = overlay.querySelector('.cobrowser-action-text');
-  if (overlay && textEl) {
+  if (textEl) {
     textEl.textContent = text;
     overlay.style.display = 'flex';
   }
