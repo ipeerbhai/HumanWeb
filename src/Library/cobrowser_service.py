@@ -191,13 +191,65 @@ async def handle_native_click(screen_x: float, screen_y: float) -> Dict[str, Any
         return {"success": False, "error": str(e)}
 
 
+def get_firefox_window_id() -> Optional[int]:
+    """
+    Get Firefox window ID from xwininfo.
+    Returns window ID as int, or None if not found.
+    """
+    try:
+        result = subprocess.run(
+            ['xwininfo', '-root', '-tree'],
+            capture_output=True, text=True, timeout=5
+        )
+
+        for line in result.stdout.split('\n'):
+            if 'Navigator' in line and 'firefox' in line.lower():
+                # Parse: 0x1a00016 "title": ...
+                match = re.match(r'\s*(0x[0-9a-fA-F]+)', line)
+                if match:
+                    return int(match.group(1), 16)
+        return None
+    except Exception:
+        return None
+
+
+def focus_firefox_window() -> bool:
+    """
+    Focus the Firefox window using xdotool.
+
+    Returns True if successful, False otherwise.
+    """
+    try:
+        window_id = get_firefox_window_id()
+        if window_id is None:
+            return False
+
+        # Use xdotool to activate the window
+        result = subprocess.run(
+            ['xdotool', 'windowactivate', '--sync', str(window_id)],
+            capture_output=True, text=True, timeout=5
+        )
+
+        if result.returncode != 0:
+            return False
+
+        time.sleep(0.2)  # Brief pause for focus to settle
+        return True
+    except Exception:
+        return False
+
+
 async def handle_native_type(text: str) -> Dict[str, Any]:
-    """Type text using native keyboard."""
+    """Type text using native keyboard. Focuses Firefox window first."""
     error = check_native_permission()
     if error:
         return error
 
     try:
+        # Focus Firefox window first
+        if not focus_firefox_window():
+            return {"success": False, "error": "Could not focus Firefox window"}
+
         pyautogui.write(text, interval=0.02)
         return {"success": True}
     except Exception as e:
@@ -205,13 +257,30 @@ async def handle_native_type(text: str) -> Dict[str, Any]:
 
 
 async def handle_native_hotkey(keys: List[str]) -> Dict[str, Any]:
-    """Press a keyboard hotkey combination."""
+    """Press a keyboard hotkey combination. Uses xdotool for reliable window focus and key sending."""
     error = check_native_permission()
     if error:
         return error
 
     try:
-        pyautogui.hotkey(*keys)
+        # Get Firefox window ID
+        window_id = get_firefox_window_id()
+        if window_id is None:
+            return {"success": False, "error": "Could not find Firefox window"}
+
+        # Use xdotool for both activation and key sending
+        # This is more reliable than pyautogui from background processes
+        key_combo = '+'.join(keys)
+
+        # Activate window and send key in one command chain
+        result = subprocess.run(
+            ['bash', '-c', f'xdotool windowactivate --sync {window_id} && sleep 0.3 && xdotool key {key_combo}'],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode != 0:
+            return {"success": False, "error": f"xdotool failed: {result.stderr}"}
+
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
