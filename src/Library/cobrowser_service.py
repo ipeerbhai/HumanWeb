@@ -115,20 +115,32 @@ def calculate_corrected_screen_coords(
     elem_center_x_css = rect_left + rect_width / 2
     elem_center_y_css = rect_top + rect_height / 2
 
-    # Device pixel ratio (constant for this display)
-    # This is the ratio of physical pixels to CSS pixels at 100% zoom
-    DPR = 1.5
+    # Get viewport dimensions to calculate chrome offset dynamically
+    firefox_inner_w = debug_info.get('windowInnerWidth', firefox_outer_w)
+    firefox_inner_h = debug_info.get('windowInnerHeight', firefox_outer_h)
 
-    # Browser chrome offset in PHYSICAL pixels (doesn't change with zoom)
-    # This is the distance from window edge to viewport content area
-    # Empirically determined: ~88px horizontal, ~111px vertical (tabs + address bar)
-    CHROME_X_PHYSICAL = 88
-    CHROME_Y_PHYSICAL = 111
+    # Chrome offset in CSS pixels (difference between outer and inner dimensions)
+    # This represents: left+right chrome for X, top+bottom chrome for Y
+    # For element positioning, we use the full difference as the offset
+    # because window.screenX on Firefox/Linux reports window edge, not viewport edge
+    chrome_x_css = firefox_outer_w - firefox_inner_w
+    chrome_y_css = firefox_outer_h - firefox_inner_h
+
+    # Convert chrome offset to physical pixels using scale
+    chrome_x_physical = chrome_x_css * scale
+    chrome_y_physical = chrome_y_css * scale
 
     # Calculate physical screen coordinates
-    # Chrome is in physical pixels (fixed), element position scales with zoom
-    physical_x = x11_pos['x'] + CHROME_X_PHYSICAL + elem_center_x_css * scale
-    physical_y = x11_pos['y'] + CHROME_Y_PHYSICAL + elem_center_y_css * scale
+    physical_x = x11_pos['x'] + chrome_x_physical + elem_center_x_css * scale
+    physical_y = x11_pos['y'] + chrome_y_physical + elem_center_y_css * scale
+
+    # Debug logging
+    print(f"[COORD DEBUG] X11 pos: ({x11_pos['x']}, {x11_pos['y']}), size: {x11_pos['width']}x{x11_pos['height']}")
+    print(f"[COORD DEBUG] Firefox outer: {firefox_outer_w}x{firefox_outer_h}, inner: {firefox_inner_w}x{firefox_inner_h}")
+    print(f"[COORD DEBUG] Scale: {scale:.3f}, Chrome CSS: ({chrome_x_css}, {chrome_y_css}), Chrome physical: ({chrome_x_physical:.1f}, {chrome_y_physical:.1f})")
+    print(f"[COORD DEBUG] Rect: ({rect_left}, {rect_top}) size {rect_width}x{rect_height}")
+    print(f"[COORD DEBUG] Element center CSS: ({elem_center_x_css:.1f}, {elem_center_y_css:.1f})")
+    print(f"[COORD DEBUG] Final physical: ({physical_x:.1f}, {physical_y:.1f})")
 
     return physical_x, physical_y
 
@@ -187,6 +199,19 @@ async def handle_native_click(screen_x: float, screen_y: float) -> Dict[str, Any
     try:
         pyautogui.click(screen_x, screen_y)
         return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def handle_native_move(screen_x: float, screen_y: float) -> Dict[str, Any]:
+    """Move the mouse to screen coordinates without clicking."""
+    error = check_native_permission()
+    if error:
+        return error
+
+    try:
+        pyautogui.moveTo(screen_x, screen_y)
+        return {"success": True, "moved_to": {"x": screen_x, "y": screen_y}}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -777,13 +802,45 @@ async def send_command_sync(session_id: str, command: Dict[str, Any]):
         }
 
     elif command_type == "command.nativeMove":
-        # Direct x,y coordinates for mouse move (testing)
+        # Check if direct x,y coordinates provided (for testing)
         screen_x = payload.get("x")
         screen_y = payload.get("y")
+        debug_info = None
+
         if screen_x is None or screen_y is None:
-            return {"success": False, "error": "x and y coordinates required"}
+            # Get screen coordinates from the extension via selector/xpath
+            coords_result = await service.send_command_and_wait(
+                session_id, "command.getScreenCoordinates", payload, timeout
+            )
+            if not coords_result.get("success"):
+                return coords_result
+
+            result_data = coords_result.get("result", {})
+            screen_x = result_data.get("screenX")
+            screen_y = result_data.get("screenY")
+            debug_info = result_data.get("debug")
+
+            if screen_x is None or screen_y is None:
+                return {"success": False, "error": "Failed to get screen coordinates"}
+
+            # Log debug info for troubleshooting
+            print(f"[MOVE DEBUG] Extension coords: ({screen_x}, {screen_y})")
+            if debug_info:
+                print(f"[MOVE DEBUG] Debug info: {debug_info}")
+
+            # Apply X11 coordinate correction for multi-monitor setups
+            screen_x, screen_y = calculate_corrected_screen_coords(
+                screen_x, screen_y, debug_info
+            )
+
+        # Execute the native move (no click)
         move_result = await handle_native_move(screen_x, screen_y)
-        return {"success": move_result.get("success", False), "result": move_result}
+        return {
+            "success": move_result.get("success", False),
+            "result": move_result,
+            "corrected_coords": {"x": screen_x, "y": screen_y},
+            "debug_info": debug_info
+        }
 
     elif command_type == "command.nativeType":
         text = payload.get("text", "")

@@ -363,6 +363,28 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="cobrowser_native_move",
+            description="Move the mouse to an element without clicking. Use for debugging native click positioning. Requires 'Allow Mouse/Keyboard Control' permission.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element (default: 0)"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
             name="cobrowser_native_type",
             description="Type text using OS-level keyboard input. Use this for file upload dialogs and other native OS dialogs that don't accept synthetic events. Requires 'Allow Mouse/Keyboard Control' permission.",
             inputSchema={
@@ -689,6 +711,28 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if index is not None:
             target += f"[{index}]"
         return format_result(result, f"Native click on: {target}")
+
+    elif name == "cobrowser_native_move":
+        selector = arguments.get("selector")
+        xpath = arguments.get("xpath")
+        index = arguments.get("index")
+
+        if not selector and not xpath:
+            return [TextContent(type="text", text="Error: selector or xpath is required")]
+
+        payload = {}
+        if selector:
+            payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
+        if index is not None:
+            payload["index"] = index
+
+        result = await send_command("command.nativeMove", payload)
+        target = selector or xpath
+        if index is not None:
+            target += f"[{index}]"
+        return format_result(result, f"Moved mouse to: {target}")
 
     elif name == "cobrowser_native_type":
         text = arguments.get("text")
