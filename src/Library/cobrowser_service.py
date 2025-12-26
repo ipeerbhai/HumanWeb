@@ -94,13 +94,16 @@ def calculate_corrected_screen_coords(
 
     # Get the actual Firefox window position from X11
     x11_pos = get_firefox_window_position()
-    if x11_pos is None:
-        return extension_screen_x, extension_screen_y
 
-    # Get Firefox's reported dimensions
+    # Get Firefox's reported dimensions and position
     firefox_outer_w = debug_info.get('windowOuterWidth', 1)
     firefox_outer_h = debug_info.get('windowOuterHeight', 1)
+    firefox_screen_x = debug_info.get('windowScreenX', 0)
     firefox_screen_y = debug_info.get('windowScreenY', 0)
+
+    # If X11 position unavailable, fall back to extension coords
+    if x11_pos is None:
+        return extension_screen_x, extension_screen_y
 
     # Get element rect (in CSS pixels, relative to viewport)
     rect_left = debug_info.get('rectLeft', 0)
@@ -119,16 +122,23 @@ def calculate_corrected_screen_coords(
     firefox_inner_w = debug_info.get('windowInnerWidth', firefox_outer_w)
     firefox_inner_h = debug_info.get('windowInnerHeight', firefox_outer_h)
 
-    # Chrome offset in CSS pixels (difference between outer and inner dimensions)
-    # This represents: left+right chrome for X, top+bottom chrome for Y
-    # For element positioning, we use the full difference as the offset
-    # because window.screenX on Firefox/Linux reports window edge, not viewport edge
-    chrome_x_css = firefox_outer_w - firefox_inner_w
+    # Chrome offset calculation
+    # The physical chrome (tabs, address bar) is constant regardless of zoom
+    # At 100% zoom, chrome = outer - inner. At other zoom levels, this formula
+    # doesn't scale correctly because innerWidth doesn't scale proportionally.
+    # Solution: calculate chrome at 100% zoom equivalent
+    # chrome_physical = X11_size - (inner_css * scale)... but this underestimates
+    #
+    # Empirically, at 100% zoom on this system: chrome ≈ (55, 85) physical pixels
+    # At 110% zoom, the formula gives ~(28, 74) which is wrong
+    # Use outer - inner and DON'T scale, since chrome doesn't zoom
+    chrome_x_css = firefox_outer_w - firefox_inner_w  # CSS pixels
     chrome_y_css = firefox_outer_h - firefox_inner_h
 
-    # Convert chrome offset to physical pixels using scale
-    chrome_x_physical = chrome_x_css * scale
-    chrome_y_physical = chrome_y_css * scale
+    # Chrome is rendered at display DPR, not page zoom
+    # Approximate: use max of calculated and baseline (55, 85) for robustness
+    chrome_x_physical = max(chrome_x_css, 55.0)
+    chrome_y_physical = max(chrome_y_css, 85.0)
 
     # Calculate physical screen coordinates
     physical_x = x11_pos['x'] + chrome_x_physical + elem_center_x_css * scale
@@ -137,7 +147,7 @@ def calculate_corrected_screen_coords(
     # Debug logging
     print(f"[COORD DEBUG] X11 pos: ({x11_pos['x']}, {x11_pos['y']}), size: {x11_pos['width']}x{x11_pos['height']}")
     print(f"[COORD DEBUG] Firefox outer: {firefox_outer_w}x{firefox_outer_h}, inner: {firefox_inner_w}x{firefox_inner_h}")
-    print(f"[COORD DEBUG] Scale: {scale:.3f}, Chrome CSS: ({chrome_x_css}, {chrome_y_css}), Chrome physical: ({chrome_x_physical:.1f}, {chrome_y_physical:.1f})")
+    print(f"[COORD DEBUG] Scale: {scale:.3f}, Chrome physical: ({chrome_x_physical:.1f}, {chrome_y_physical:.1f})")
     print(f"[COORD DEBUG] Rect: ({rect_left}, {rect_top}) size {rect_width}x{rect_height}")
     print(f"[COORD DEBUG] Element center CSS: ({elem_center_x_css:.1f}, {elem_center_y_css:.1f})")
     print(f"[COORD DEBUG] Final physical: ({physical_x:.1f}, {physical_y:.1f})")
