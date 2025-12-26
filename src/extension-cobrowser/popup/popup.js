@@ -15,6 +15,7 @@ const toggleModeBtn = document.getElementById('toggle-mode-btn');
 const urlGroup = document.getElementById('url-group');
 const serviceUrl = document.getElementById('service-url');
 const optionsLink = document.getElementById('options-link');
+const allowNativeControl = document.getElementById('allow-native-control');
 
 /**
  * Update UI based on current state
@@ -121,10 +122,34 @@ function toggleMode() {
   setTimeout(updateUI, 100);
 }
 
+/**
+ * Load native control permission setting
+ */
+async function loadNativeControlSetting() {
+  const { allowNativeControl: allowed } = await browser.storage.local.get('allowNativeControl');
+  allowNativeControl.checked = allowed === true;
+}
+
+/**
+ * Save native control permission setting and sync with Python server
+ */
+async function saveNativeControlSetting() {
+  const allowed = allowNativeControl.checked;
+  await browser.storage.local.set({ allowNativeControl: allowed });
+
+  // Notify background script to sync permission with Python server
+  browser.runtime.sendMessage({
+    type: 'native.permission.sync',
+    allowed: allowed
+  });
+}
+
 // Event listeners
 connectBtn.addEventListener('click', connect);
 disconnectBtn.addEventListener('click', disconnect);
 toggleModeBtn.addEventListener('click', toggleMode);
+
+allowNativeControl.addEventListener('change', saveNativeControlSetting);
 
 optionsLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -133,6 +158,7 @@ optionsLink.addEventListener('click', (e) => {
 
 // Initial UI update
 updateUI();
+loadNativeControlSetting();
 
 // Poll for updates while popup is open
 setInterval(updateUI, 1000);

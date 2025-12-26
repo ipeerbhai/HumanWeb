@@ -45,18 +45,24 @@ function initialize() {
  * Create overlay UI elements
  */
 function createOverlay() {
+  // Remove existing overlay if it exists (prevents duplicates)
+  const existingOverlay = document.getElementById('cobrowser-overlay');
+  if (existingOverlay) {
+    existingOverlay.remove();
+  }
+
   // Create container
   overlay = document.createElement('div');
   overlay.id = 'cobrowser-overlay';
   overlay.innerHTML = `
-    <div id="cobrowser-mode-indicator" class="cobrowser-indicator">
+    <div id="cobrowser-mode-indicator" class="cobrowser-indicator cobrowser-draggable">
       <span class="cobrowser-mode-icon">🤖</span>
       <span class="cobrowser-mode-text">AI</span>
     </div>
     <div id="cobrowser-action-overlay" class="cobrowser-action" style="display: none;">
       <span class="cobrowser-action-text"></span>
     </div>
-    <div id="cobrowser-handoff-notification" class="cobrowser-handoff" style="display: none;">
+    <div id="cobrowser-handoff-notification" class="cobrowser-handoff cobrowser-draggable" style="display: none;">
       <div class="cobrowser-handoff-content">
         <div class="cobrowser-handoff-icon">🙋</div>
         <div class="cobrowser-handoff-message"></div>
@@ -71,6 +77,88 @@ function createOverlay() {
   document.getElementById('cobrowser-resume-btn').addEventListener('click', () => {
     browser.runtime.sendMessage({ type: 'handoff.resume' });
     hideHandoffNotification();
+  });
+
+  // Make elements draggable
+  makeDraggable(document.getElementById('cobrowser-mode-indicator'), 'indicator');
+  makeDraggable(document.getElementById('cobrowser-handoff-notification'), 'handoff');
+}
+
+/**
+ * Make an element draggable
+ * @param {Element} element - Element to make draggable
+ * @param {string} key - Storage key for position
+ */
+function makeDraggable(element, key) {
+  if (!element) return;
+
+  let isDragging = false;
+  let startX, startY, initialX, initialY;
+
+  // Restore saved position
+  const savedPos = localStorage.getItem(`cobrowser-pos-${key}`);
+  if (savedPos) {
+    try {
+      const { x, y } = JSON.parse(savedPos);
+      element.style.left = `${x}px`;
+      element.style.top = `${y}px`;
+      element.style.right = 'auto';
+      element.style.bottom = 'auto';
+      element.style.transform = 'none';
+    } catch (e) {
+      // Ignore invalid saved position
+    }
+  }
+
+  element.addEventListener('mousedown', (e) => {
+    // Don't drag if clicking on a button (check target and parents)
+    if (e.target.closest('button')) return;
+
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+
+    const rect = element.getBoundingClientRect();
+    initialX = rect.left;
+    initialY = rect.top;
+
+    element.style.cursor = 'grabbing';
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    let newX = initialX + dx;
+    let newY = initialY + dy;
+
+    // Keep within viewport
+    const rect = element.getBoundingClientRect();
+    newX = Math.max(0, Math.min(newX, window.innerWidth - rect.width));
+    newY = Math.max(0, Math.min(newY, window.innerHeight - rect.height));
+
+    element.style.left = `${newX}px`;
+    element.style.top = `${newY}px`;
+    element.style.right = 'auto';
+    element.style.bottom = 'auto';
+    element.style.transform = 'none';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    element.style.cursor = '';
+
+    // Save position
+    const rect = element.getBoundingClientRect();
+    localStorage.setItem(`cobrowser-pos-${key}`, JSON.stringify({
+      x: rect.left,
+      y: rect.top
+    }));
   });
 }
 
@@ -162,6 +250,11 @@ async function handleMessage(message, sender, sendResponse) {
         sendActionResult('command.getState', message.correlationId, state);
         return state;
 
+      case 'command.getScreenCoordinates':
+        const coordsResult = await actionExecutor.getElementScreenCoordinates(message.payload);
+        sendActionResult('command.getScreenCoordinates', message.correlationId, coordsResult);
+        return coordsResult;
+
       // Handoff UI
       case 'handoff.show':
         showHandoffNotification(message.reason, message.message);
@@ -209,27 +302,32 @@ function updateModeIndicator(mode) {
 
   const icon = indicator.querySelector('.cobrowser-mode-icon');
   const text = indicator.querySelector('.cobrowser-mode-text');
+  if (!icon || !text) return;
+
+  // Clear and set content to prevent any overlapping
+  icon.innerHTML = '';
+  text.innerHTML = '';
 
   switch (mode) {
     case 'CLAUDE':
       icon.textContent = '🤖';
       text.textContent = 'AI';
-      indicator.className = 'cobrowser-indicator cobrowser-mode-claude';
+      indicator.className = 'cobrowser-indicator cobrowser-draggable cobrowser-mode-claude';
       break;
     case 'HUMAN':
       icon.textContent = '👤';
       text.textContent = 'YOU';
-      indicator.className = 'cobrowser-indicator cobrowser-mode-human';
+      indicator.className = 'cobrowser-indicator cobrowser-draggable cobrowser-mode-human';
       break;
     case 'SHARED':
       icon.textContent = '🤝';
       text.textContent = 'BOTH';
-      indicator.className = 'cobrowser-indicator cobrowser-mode-shared';
+      indicator.className = 'cobrowser-indicator cobrowser-draggable cobrowser-mode-shared';
       break;
     case 'DISCONNECTED':
       icon.textContent = '⚡';
       text.textContent = 'OFF';
-      indicator.className = 'cobrowser-indicator cobrowser-mode-disconnected';
+      indicator.className = 'cobrowser-indicator cobrowser-draggable cobrowser-mode-disconnected';
       break;
   }
 }

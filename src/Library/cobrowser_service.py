@@ -23,6 +23,207 @@ from dataclasses import dataclass, field
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 
+# Native mouse/keyboard automation
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = True  # Move mouse to corner to abort
+    PYAUTOGUI_AVAILABLE = True
+except ImportError:
+    PYAUTOGUI_AVAILABLE = False
+    pyautogui = None
+
+import subprocess
+import re
+
+
+def get_firefox_window_position() -> Optional[Dict[str, int]]:
+    """
+    Get Firefox window position using xwininfo (X11).
+
+    Firefox's window.screenX/screenY are unreliable on multi-monitor X11 setups.
+    This function queries the actual window position from X11 directly.
+
+    Returns: {'x': int, 'y': int, 'width': int, 'height': int} or None
+    """
+    try:
+        result = subprocess.run(
+            ['xwininfo', '-root', '-tree'],
+            capture_output=True, text=True, timeout=5
+        )
+
+        # Find the main Firefox window (Navigator class, reasonable size)
+        for line in result.stdout.split('\n'):
+            if 'Navigator' in line and 'firefox' in line.lower():
+                # Parse: 0x1a00016 "title": ("Navigator" "firefox")  3374x1408+1986+32
+                match = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
+                if match:
+                    width, height, x, y = map(int, match.groups())
+                    if width > 100 and height > 100:  # Filter out tiny windows
+                        return {'x': x, 'y': y, 'width': width, 'height': height}
+        return None
+    except Exception:
+        return None
+
+
+def calculate_corrected_screen_coords(
+    extension_screen_x: float,
+    extension_screen_y: float,
+    debug_info: Optional[Dict[str, Any]] = None
+) -> tuple[float, float]:
+    """
+    Calculate corrected screen coordinates for native mouse automation.
+
+    Firefox on Linux X11 with HiDPI scaling reports coordinates in CSS pixels,
+    but pyautogui needs physical screen pixels. Additionally, Firefox's
+    window.screenX/screenY can be incorrect on multi-monitor setups.
+
+    This function:
+    1. Gets the actual window position from X11 (physical pixels)
+    2. Calculates the scale factor (X11 size / Firefox outer size)
+    3. Computes element position using X11 window pos + scaled rect + chrome offset
+
+    Args:
+        extension_screen_x: screenX calculated by the extension (unused, kept for API compat)
+        extension_screen_y: screenY calculated by the extension (unused, kept for API compat)
+        debug_info: Debug info from extension with rect and window dimensions
+
+    Returns: (physical_x, physical_y) in screen coordinates
+    """
+    if debug_info is None:
+        return extension_screen_x, extension_screen_y
+
+    # Get the actual Firefox window position from X11
+    x11_pos = get_firefox_window_position()
+    if x11_pos is None:
+        return extension_screen_x, extension_screen_y
+
+    # Get Firefox's reported dimensions
+    firefox_outer_w = debug_info.get('windowOuterWidth', 1)
+    firefox_outer_h = debug_info.get('windowOuterHeight', 1)
+    firefox_screen_y = debug_info.get('windowScreenY', 0)
+
+    # Get element rect (in CSS pixels, relative to viewport)
+    rect_left = debug_info.get('rectLeft', 0)
+    rect_top = debug_info.get('rectTop', 0)
+    rect_width = debug_info.get('rectWidth', 0)
+    rect_height = debug_info.get('rectHeight', 0)
+
+    # Calculate scale factor (physical pixels / CSS pixels)
+    scale = x11_pos['width'] / firefox_outer_w if firefox_outer_w > 0 else 1.0
+
+    # Element center in CSS pixels (relative to viewport)
+    elem_center_x_css = rect_left + rect_width / 2
+    elem_center_y_css = rect_top + rect_height / 2
+
+    # Device pixel ratio (constant for this display)
+    # This is the ratio of physical pixels to CSS pixels at 100% zoom
+    DPR = 1.5
+
+    # Browser chrome offset in PHYSICAL pixels (doesn't change with zoom)
+    # This is the distance from window edge to viewport content area
+    # Empirically determined: ~88px horizontal, ~111px vertical (tabs + address bar)
+    CHROME_X_PHYSICAL = 88
+    CHROME_Y_PHYSICAL = 111
+
+    # Calculate physical screen coordinates
+    # Chrome is in physical pixels (fixed), element position scales with zoom
+    physical_x = x11_pos['x'] + CHROME_X_PHYSICAL + elem_center_x_css * scale
+    physical_y = x11_pos['y'] + CHROME_Y_PHYSICAL + elem_center_y_css * scale
+
+    return physical_x, physical_y
+
+# Permission flag - must be explicitly enabled by browser extension
+# Default False for safety - no native control until user enables it
+native_control_allowed = False
+
+# Flag to cancel in-progress native automation (set by emergency stop)
+native_cancel_requested = False
+
+
+def check_native_permission() -> Dict[str, Any] | None:
+    """Check if native control is allowed. Returns error dict if not allowed, None if OK."""
+    if not PYAUTOGUI_AVAILABLE:
+        return {"success": False, "error": "pyautogui not installed"}
+    if not native_control_allowed:
+        return {"success": False, "error": "Native control not enabled. Enable in extension popup."}
+    if native_cancel_requested:
+        return {"success": False, "error": "Native control cancelled by emergency stop"}
+    return None
+
+
+# ============================================
+# Native Automation Functions
+# ============================================
+
+async def handle_native_permission(allowed: bool) -> Dict[str, Any]:
+    """Set native control permission state. Called when browser permission changes."""
+    global native_control_allowed, native_cancel_requested
+    native_control_allowed = allowed
+    # If disabling, also clear any cancel state so re-enabling works cleanly
+    if not allowed:
+        native_cancel_requested = False
+    return {"success": True, "allowed": allowed}
+
+
+async def handle_native_move(screen_x: float, screen_y: float) -> Dict[str, Any]:
+    """Move mouse to screen coordinates (no click)."""
+    error = check_native_permission()
+    if error:
+        return error
+
+    try:
+        pyautogui.moveTo(screen_x, screen_y, duration=0.3)
+        return {"success": True, "movedTo": {"x": screen_x, "y": screen_y}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def handle_native_click(screen_x: float, screen_y: float) -> Dict[str, Any]:
+    """Perform a native mouse click at screen coordinates."""
+    error = check_native_permission()
+    if error:
+        return error
+
+    try:
+        pyautogui.click(screen_x, screen_y)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def handle_native_type(text: str) -> Dict[str, Any]:
+    """Type text using native keyboard."""
+    error = check_native_permission()
+    if error:
+        return error
+
+    try:
+        pyautogui.write(text, interval=0.02)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def handle_native_hotkey(keys: List[str]) -> Dict[str, Any]:
+    """Press a keyboard hotkey combination."""
+    error = check_native_permission()
+    if error:
+        return error
+
+    try:
+        pyautogui.hotkey(*keys)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def handle_native_cancel() -> Dict[str, Any]:
+    """Emergency stop - immediately disable all native automation."""
+    global native_control_allowed, native_cancel_requested
+    native_control_allowed = False
+    native_cancel_requested = True
+    return {"success": True}
+
 
 # ============================================
 # Enums and Data Models
@@ -255,6 +456,60 @@ class CoBrowserService:
                 correlation_id=msg_id
             )
 
+        # Handle native automation commands (executed on server side)
+        if msg_type == "native.click":
+            payload = message.get("payload", {})
+            result = await handle_native_click(
+                payload.get("screenX", 0),
+                payload.get("screenY", 0)
+            )
+            return create_message(
+                msg_type="native.click.result",
+                session_id=session_id,
+                payload=result,
+                correlation_id=correlation_id or msg_id
+            )
+
+        if msg_type == "native.type":
+            payload = message.get("payload", {})
+            result = await handle_native_type(payload.get("text", ""))
+            return create_message(
+                msg_type="native.type.result",
+                session_id=session_id,
+                payload=result,
+                correlation_id=correlation_id or msg_id
+            )
+
+        if msg_type == "native.hotkey":
+            payload = message.get("payload", {})
+            result = await handle_native_hotkey(payload.get("keys", []))
+            return create_message(
+                msg_type="native.hotkey.result",
+                session_id=session_id,
+                payload=result,
+                correlation_id=correlation_id or msg_id
+            )
+
+        if msg_type == "native.cancel":
+            result = await handle_native_cancel()
+            return create_message(
+                msg_type="native.cancel.result",
+                session_id=session_id,
+                payload=result,
+                correlation_id=correlation_id or msg_id
+            )
+
+        if msg_type == "native.permission":
+            payload = message.get("payload", {})
+            allowed = payload.get("allowed", False)
+            result = await handle_native_permission(allowed)
+            return create_message(
+                msg_type="native.permission.result",
+                session_id=session_id,
+                payload=result,
+                correlation_id=correlation_id or msg_id
+            )
+
         # Handle commands (placeholder for now)
         if msg_type.startswith("command."):
             return create_message(
@@ -415,6 +670,63 @@ async def send_command_sync(session_id: str, command: Dict[str, Any]):
     payload = command.get("payload", {})
     timeout = command.get("timeout", 30.0)
 
+    # Handle native automation commands directly in Python
+    # These require getting screen coords from extension, then executing pyautogui
+    if command_type == "command.nativeClick":
+        # Check if direct x,y coordinates provided (for testing)
+        screen_x = payload.get("x")
+        screen_y = payload.get("y")
+        debug_info = None
+
+        if screen_x is None or screen_y is None:
+            # Get screen coordinates from the extension via selector/xpath
+            coords_result = await service.send_command_and_wait(
+                session_id, "command.getScreenCoordinates", payload, timeout
+            )
+            if not coords_result.get("success"):
+                return coords_result
+
+            result_data = coords_result.get("result", {})
+            screen_x = result_data.get("screenX")
+            screen_y = result_data.get("screenY")
+            debug_info = result_data.get("debug")
+
+            if screen_x is None or screen_y is None:
+                return {"success": False, "error": "Failed to get screen coordinates"}
+
+            # Apply X11 coordinate correction for multi-monitor setups
+            screen_x, screen_y = calculate_corrected_screen_coords(
+                screen_x, screen_y, debug_info
+            )
+
+        # Execute the native click
+        click_result = await handle_native_click(screen_x, screen_y)
+        return {
+            "success": click_result.get("success", False),
+            "result": click_result,
+            "corrected_coords": {"x": screen_x, "y": screen_y}
+        }
+
+    elif command_type == "command.nativeMove":
+        # Direct x,y coordinates for mouse move (testing)
+        screen_x = payload.get("x")
+        screen_y = payload.get("y")
+        if screen_x is None or screen_y is None:
+            return {"success": False, "error": "x and y coordinates required"}
+        move_result = await handle_native_move(screen_x, screen_y)
+        return {"success": move_result.get("success", False), "result": move_result}
+
+    elif command_type == "command.nativeType":
+        text = payload.get("text", "")
+        type_result = await handle_native_type(text)
+        return {"success": type_result.get("success", False), "result": type_result}
+
+    elif command_type == "command.nativeHotkey":
+        keys = payload.get("keys", [])
+        hotkey_result = await handle_native_hotkey(keys)
+        return {"success": hotkey_result.get("success", False), "result": hotkey_result}
+
+    # Standard command - send via WebSocket and wait for response
     result = await service.send_command_and_wait(
         session_id, command_type, payload, timeout
     )

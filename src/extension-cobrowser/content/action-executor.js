@@ -24,13 +24,97 @@ class ActionExecutor {
   }
 
   /**
+   * Generate a description of the element target for error messages
+   * @param {object} options - { selector, xpath, index, x, y }
+   * @returns {string}
+   */
+  describeTarget(options) {
+    let target = options.selector || options.xpath || (options.x !== undefined ? `(${options.x}, ${options.y})` : 'unknown');
+    if (options.index !== undefined && options.index > 0) {
+      target += `[${options.index}]`;
+    }
+    return target;
+  }
+
+  /**
+   * Get screen coordinates for an element (for native mouse automation)
+   * @param {Element} element
+   * @returns {object} - { screenX, screenY }
+   */
+  getScreenCoordinates(element) {
+    const rect = element.getBoundingClientRect();
+    // Viewport coordinates + window position on screen
+    const screenX = window.screenX + rect.left + rect.width / 2;
+    const screenY = window.screenY + rect.top + rect.height / 2;
+    return {
+      screenX,
+      screenY,
+      debug: {
+        windowScreenX: window.screenX,
+        windowScreenY: window.screenY,
+        windowOuterWidth: window.outerWidth,
+        windowOuterHeight: window.outerHeight,
+        windowInnerWidth: window.innerWidth,
+        windowInnerHeight: window.innerHeight,
+        screenLeft: window.screenLeft,  // Alternative to screenX
+        screenTop: window.screenTop,    // Alternative to screenY
+        rectLeft: rect.left,
+        rectTop: rect.top,
+        rectWidth: rect.width,
+        rectHeight: rect.height
+      }
+    };
+  }
+
+  /**
+   * Get screen coordinates for an element by selector/xpath
+   * @param {object} options - { selector, xpath, index }
+   * @returns {object} - { success, screenX, screenY, error }
+   */
+  async getElementScreenCoordinates(options) {
+    try {
+      const element = this.findElement(options);
+
+      if (!element) {
+        return {
+          success: false,
+          error: `Element not found: ${this.describeTarget(options)}`
+        };
+      }
+
+      // Scroll into view first
+      element.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const coords = this.getScreenCoordinates(element);
+      return {
+        success: true,
+        screenX: coords.screenX,
+        screenY: coords.screenY,
+        debug: coords.debug
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to get coordinates: ${error.message}`
+      };
+    }
+  }
+
+  /**
    * Find an element by selector or XPath
-   * @param {object} options - { selector, xpath, x, y }
+   * @param {object} options - { selector, xpath, index, x, y }
    * @returns {Element|null}
    */
   findElement(options) {
+    const index = options.index || 0;
+
     if (options.selector) {
-      return document.querySelector(options.selector);
+      const elements = document.querySelectorAll(options.selector);
+      if (index >= elements.length) {
+        return null;
+      }
+      return elements[index];
     }
 
     if (options.xpath) {
@@ -38,10 +122,13 @@ class ActionExecutor {
         options.xpath,
         document,
         null,
-        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
         null
       );
-      return result.singleNodeValue;
+      if (index >= result.snapshotLength) {
+        return null;
+      }
+      return result.snapshotItem(index);
     }
 
     if (options.x !== undefined && options.y !== undefined) {
@@ -143,7 +230,7 @@ class ActionExecutor {
       if (!element) {
         return {
           success: false,
-          error: `Element not found: ${options.selector || options.xpath || `(${options.x}, ${options.y})`}`
+          error: `Element not found: ${this.describeTarget(options)}`
         };
       }
 
@@ -168,47 +255,66 @@ class ActionExecutor {
       // Small delay to allow scroll animation
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Get click coordinates - use provided x,y or element center
-      let clientX, clientY;
-      if (options.x !== undefined && options.y !== undefined) {
-        clientX = options.x;
-        clientY = options.y;
+      // Use native click for standard elements (creates trusted event that can open popups)
+      // Only use synthetic events for canvas or coordinate-based clicks
+      const isCoordinateClick = options.x !== undefined && options.y !== undefined;
+      const isCanvasElement = element instanceof HTMLCanvasElement;
+
+      if (!isCoordinateClick && !isCanvasElement && element.click) {
+        // Native click - creates trusted event (isTrusted = true)
+        element.click();
+
+        // For links/buttons that open popups, also try focus + keyboard
+        // This can help with some sites that check for keyboard activation
+        if (element.tagName === 'A' || element.tagName === 'BUTTON' ||
+            element.getAttribute('role') === 'button' || element.getAttribute('role') === 'link') {
+          element.focus();
+          element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+          element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+        }
       } else {
-        const rect = element.getBoundingClientRect();
-        clientX = rect.left + rect.width / 2;
-        clientY = rect.top + rect.height / 2;
+        // Synthetic events for canvas/coordinate-based clicks
+        // Note: These have isTrusted = false and can't trigger popups
+        let clientX, clientY;
+        if (isCoordinateClick) {
+          clientX = options.x;
+          clientY = options.y;
+        } else {
+          const rect = element.getBoundingClientRect();
+          clientX = rect.left + rect.width / 2;
+          clientY = rect.top + rect.height / 2;
+        }
+
+        const mousedownEvent = new MouseEvent('mousedown', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          button: 0
+        });
+        element.dispatchEvent(mousedownEvent);
+
+        const mouseupEvent = new MouseEvent('mouseup', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          button: 0
+        });
+        element.dispatchEvent(mouseupEvent);
+
+        const clickEvent = new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          button: 0
+        });
+        element.dispatchEvent(clickEvent);
       }
-
-      // Dispatch proper mouse events for canvas compatibility
-      const mousedownEvent = new MouseEvent('mousedown', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY,
-        button: 0
-      });
-      element.dispatchEvent(mousedownEvent);
-
-      const mouseupEvent = new MouseEvent('mouseup', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY,
-        button: 0
-      });
-      element.dispatchEvent(mouseupEvent);
-
-      const clickEvent = new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY,
-        button: 0
-      });
-      element.dispatchEvent(clickEvent);
 
       return { success: true };
     } catch (error) {
@@ -231,7 +337,7 @@ class ActionExecutor {
       if (!element) {
         return {
           success: false,
-          error: `Element not found: ${options.selector || options.xpath || `(${options.x}, ${options.y})`}`
+          error: `Element not found: ${this.describeTarget(options)}`
         };
       }
 
@@ -256,56 +362,73 @@ class ActionExecutor {
       // Small delay to allow scroll animation
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Get click coordinates - use provided x,y or element center
-      let clientX, clientY;
-      if (options.x !== undefined && options.y !== undefined) {
-        clientX = options.x;
-        clientY = options.y;
+      // Use native events for standard elements (creates trusted events)
+      // Only use synthetic events for canvas or coordinate-based clicks
+      const isCoordinateClick = options.x !== undefined && options.y !== undefined;
+      const isCanvasElement = element instanceof HTMLCanvasElement;
+
+      if (!isCoordinateClick && !isCanvasElement && element.click) {
+        // Native double-click via two rapid clicks
+        // Creates trusted events (isTrusted = true)
+        element.click();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        element.click();
+        // Dispatch dblclick event (still synthetic but the clicks were trusted)
+        element.dispatchEvent(new MouseEvent('dblclick', {
+          bubbles: true, cancelable: true, view: window, button: 0, detail: 2
+        }));
       } else {
-        const rect = element.getBoundingClientRect();
-        clientX = rect.left + rect.width / 2;
-        clientY = rect.top + rect.height / 2;
+        // Synthetic events for canvas/coordinate-based clicks
+        let clientX, clientY;
+        if (isCoordinateClick) {
+          clientX = options.x;
+          clientY = options.y;
+        } else {
+          const rect = element.getBoundingClientRect();
+          clientX = rect.left + rect.width / 2;
+          clientY = rect.top + rect.height / 2;
+        }
+
+        // Dispatch full event sequence for canvas compatibility (both Pointer and Mouse events)
+        const pointerOpts = {
+          bubbles: true, cancelable: true, view: window, clientX, clientY,
+          button: 0, buttons: 1, pointerType: 'mouse', isPrimary: true, pointerId: 1
+        };
+
+        // First click - Pointer events
+        element.dispatchEvent(new PointerEvent('pointerdown', { ...pointerOpts, detail: 1 }));
+        element.dispatchEvent(new MouseEvent('mousedown', {
+          bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
+        }));
+        element.dispatchEvent(new PointerEvent('pointerup', { ...pointerOpts, buttons: 0, detail: 1 }));
+        element.dispatchEvent(new MouseEvent('mouseup', {
+          bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
+        }));
+        element.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
+        }));
+
+        // Small delay between clicks
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // Second click - Pointer events
+        element.dispatchEvent(new PointerEvent('pointerdown', { ...pointerOpts, detail: 2 }));
+        element.dispatchEvent(new MouseEvent('mousedown', {
+          bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+        }));
+        element.dispatchEvent(new PointerEvent('pointerup', { ...pointerOpts, buttons: 0, detail: 2 }));
+        element.dispatchEvent(new MouseEvent('mouseup', {
+          bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+        }));
+        element.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+        }));
+
+        // Finally dispatch dblclick
+        element.dispatchEvent(new MouseEvent('dblclick', {
+          bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
+        }));
       }
-
-      // Dispatch full event sequence for canvas compatibility (both Pointer and Mouse events)
-      const pointerOpts = {
-        bubbles: true, cancelable: true, view: window, clientX, clientY,
-        button: 0, buttons: 1, pointerType: 'mouse', isPrimary: true, pointerId: 1
-      };
-
-      // First click - Pointer events
-      element.dispatchEvent(new PointerEvent('pointerdown', { ...pointerOpts, detail: 1 }));
-      element.dispatchEvent(new MouseEvent('mousedown', {
-        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
-      }));
-      element.dispatchEvent(new PointerEvent('pointerup', { ...pointerOpts, buttons: 0, detail: 1 }));
-      element.dispatchEvent(new MouseEvent('mouseup', {
-        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
-      }));
-      element.dispatchEvent(new MouseEvent('click', {
-        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1
-      }));
-
-      // Small delay between clicks
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      // Second click - Pointer events
-      element.dispatchEvent(new PointerEvent('pointerdown', { ...pointerOpts, detail: 2 }));
-      element.dispatchEvent(new MouseEvent('mousedown', {
-        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
-      }));
-      element.dispatchEvent(new PointerEvent('pointerup', { ...pointerOpts, buttons: 0, detail: 2 }));
-      element.dispatchEvent(new MouseEvent('mouseup', {
-        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
-      }));
-      element.dispatchEvent(new MouseEvent('click', {
-        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
-      }));
-
-      // Finally dispatch dblclick
-      element.dispatchEvent(new MouseEvent('dblclick', {
-        bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 2
-      }));
 
       return { success: true };
     } catch (error) {
@@ -328,7 +451,7 @@ class ActionExecutor {
       if (!element) {
         return {
           success: false,
-          error: `Element not found: ${options.selector || options.xpath || `(${options.x}, ${options.y})`}`
+          error: `Element not found: ${this.describeTarget(options)}`
         };
       }
 
@@ -534,7 +657,7 @@ class ActionExecutor {
       if (!element) {
         return {
           success: false,
-          error: `Element not found: ${options.selector || options.xpath}`
+          error: `Element not found: ${this.describeTarget(options)}`
         };
       }
 
@@ -588,7 +711,7 @@ class ActionExecutor {
         if (!element) {
           return {
             success: false,
-            error: `Element not found: ${options.selector}`
+            error: `Element not found: ${this.describeTarget(options)}`
           };
         }
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -638,7 +761,7 @@ class ActionExecutor {
       if (!element) {
         return {
           success: false,
-          error: `Element not found: ${options.selector || options.xpath}`
+          error: `Element not found: ${this.describeTarget(options)}`
         };
       }
 

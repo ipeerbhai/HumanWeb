@@ -97,13 +97,21 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="cobrowser_click",
-            description="Click an element on the page using a CSS selector or coordinates.",
+            description="Click an element on the page using a CSS selector, XPath, or coordinates.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "selector": {
                         "type": "string",
                         "description": "CSS selector for the element to click"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element (e.g., //a[text()='Enter manually'])"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element to click (default: 0, first match)"
                     },
                     "x": {
                         "type": "number",
@@ -127,6 +135,10 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "CSS selector for the element to double-click"
                     },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
+                    },
                     "x": {
                         "type": "number",
                         "description": "X coordinate (viewport) - use with y for canvas elements"
@@ -148,6 +160,10 @@ async def list_tools() -> list[Tool]:
                     "selector": {
                         "type": "string",
                         "description": "CSS selector for the element to right-click"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
                     },
                     "x": {
                         "type": "number",
@@ -197,6 +213,14 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "CSS selector for the input element"
                     },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the input element"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element to type into (default: 0, first match)"
+                    },
                     "text": {
                         "type": "string",
                         "description": "Text to type into the element"
@@ -206,7 +230,7 @@ async def list_tools() -> list[Tool]:
                         "description": "Clear the field before typing (default: false)"
                     }
                 },
-                "required": ["selector", "text"]
+                "required": ["text"]
             }
         ),
         Tool(
@@ -218,9 +242,17 @@ async def list_tools() -> list[Tool]:
                     "selector": {
                         "type": "string",
                         "description": "CSS selector for the element to read"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element to read"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element to read (default: 0, first match)"
                     }
                 },
-                "required": ["selector"]
+                "required": []
             }
         ),
         Tool(
@@ -307,6 +339,57 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["request_id"]
             }
+        ),
+        Tool(
+            name="cobrowser_native_click",
+            description="Perform an OS-level mouse click on an element. Use this for buttons that open popups (like LinkedIn Apply) which don't work with synthetic clicks. Requires 'Allow Mouse/Keyboard Control' permission in the extension popup.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element to click"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element to click (default: 0)"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="cobrowser_native_type",
+            description="Type text using OS-level keyboard input. Use this for file upload dialogs and other native OS dialogs that don't accept synthetic events. Requires 'Allow Mouse/Keyboard Control' permission.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type (e.g., file path for file dialogs)"
+                    }
+                },
+                "required": ["text"]
+            }
+        ),
+        Tool(
+            name="cobrowser_native_hotkey",
+            description="Press a keyboard hotkey combination using OS-level input. Use for keyboard shortcuts in native dialogs. Requires 'Allow Mouse/Keyboard Control' permission.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Keys to press together (e.g., ['ctrl', 'l'] or ['enter'])"
+                    }
+                },
+                "required": ["keys"]
+            }
         )
     ]
 
@@ -338,59 +421,73 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "cobrowser_click":
         selector = arguments.get("selector")
+        xpath = arguments.get("xpath")
+        index = arguments.get("index")
         x = arguments.get("x")
         y = arguments.get("y")
 
-        if not selector and (x is None or y is None):
-            return [TextContent(type="text", text="Error: selector or x,y coordinates are required")]
+        if not selector and not xpath and (x is None or y is None):
+            return [TextContent(type="text", text="Error: selector, xpath, or x,y coordinates are required")]
 
         payload = {}
         if selector:
             payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
+        if index is not None:
+            payload["index"] = index
         if x is not None and y is not None:
             payload["x"] = x
             payload["y"] = y
 
         result = await send_command("command.click", payload)
-        target = selector if selector else f"({x}, {y})"
+        target = selector or xpath or f"({x}, {y})"
+        if index is not None:
+            target += f"[{index}]"
         return format_result(result, f"Clicked element: {target}")
 
     elif name == "cobrowser_doubleclick":
         selector = arguments.get("selector")
+        xpath = arguments.get("xpath")
         x = arguments.get("x")
         y = arguments.get("y")
 
-        if not selector and (x is None or y is None):
-            return [TextContent(type="text", text="Error: selector or x,y coordinates are required")]
+        if not selector and not xpath and (x is None or y is None):
+            return [TextContent(type="text", text="Error: selector, xpath, or x,y coordinates are required")]
 
         payload = {}
         if selector:
             payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
         if x is not None and y is not None:
             payload["x"] = x
             payload["y"] = y
 
         result = await send_command("command.doubleclick", payload)
-        target = selector if selector else f"({x}, {y})"
+        target = selector or xpath or f"({x}, {y})"
         return format_result(result, f"Double-clicked element: {target}")
 
     elif name == "cobrowser_rightclick":
         selector = arguments.get("selector")
+        xpath = arguments.get("xpath")
         x = arguments.get("x")
         y = arguments.get("y")
 
-        if not selector and (x is None or y is None):
-            return [TextContent(type="text", text="Error: selector or x,y coordinates are required")]
+        if not selector and not xpath and (x is None or y is None):
+            return [TextContent(type="text", text="Error: selector, xpath, or x,y coordinates are required")]
 
         payload = {}
         if selector:
             payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
         if x is not None and y is not None:
             payload["x"] = x
             payload["y"] = y
 
         result = await send_command("command.rightclick", payload)
-        target = selector if selector else f"({x}, {y})"
+        target = selector or xpath or f"({x}, {y})"
         return format_result(result, f"Right-clicked element: {target}")
 
     elif name == "cobrowser_drag":
@@ -412,29 +509,53 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "cobrowser_type":
         selector = arguments.get("selector")
+        xpath = arguments.get("xpath")
+        index = arguments.get("index")
         text = arguments.get("text")
         clear = arguments.get("clear", False)
 
-        if not selector or not text:
-            return [TextContent(type="text", text="Error: selector and text are required")]
+        if not selector and not xpath:
+            return [TextContent(type="text", text="Error: selector or xpath is required")]
+        if not text:
+            return [TextContent(type="text", text="Error: text is required")]
 
-        result = await send_command("command.type", {
-            "selector": selector,
-            "text": text,
-            "clear": clear
-        })
-        return format_result(result, f"Typed '{text}' into {selector}")
+        payload = {"text": text, "clear": clear}
+        if selector:
+            payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
+        if index is not None:
+            payload["index"] = index
+
+        result = await send_command("command.type", payload)
+        target = selector or xpath
+        if index is not None:
+            target += f"[{index}]"
+        return format_result(result, f"Typed '{text}' into {target}")
 
     elif name == "cobrowser_read":
         selector = arguments.get("selector")
-        if not selector:
-            return [TextContent(type="text", text="Error: selector is required")]
+        xpath = arguments.get("xpath")
+        index = arguments.get("index")
+        if not selector and not xpath:
+            return [TextContent(type="text", text="Error: selector or xpath is required")]
 
-        result = await send_command("command.read", {"selector": selector})
+        payload = {}
+        if selector:
+            payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
+        if index is not None:
+            payload["index"] = index
+
+        result = await send_command("command.read", payload)
+        target = selector or xpath
+        if index is not None:
+            target += f"[{index}]"
         if result.get("success") and result.get("result", {}).get("text"):
             text = result["result"]["text"]
-            return [TextContent(type="text", text=f"Text content from {selector}:\n\n{text}")]
-        return format_result(result, f"Read from {selector}")
+            return [TextContent(type="text", text=f"Text content from {target}:\n\n{text}")]
+        return format_result(result, f"Read from {target}")
 
     elif name == "cobrowser_query_all":
         selector = arguments.get("selector")
@@ -546,6 +667,45 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return [TextContent(type="text", text=f"Cleared request {request_id}")]
             except Exception as e:
                 return [TextContent(type="text", text=f"Error clearing request: {e}")]
+
+    elif name == "cobrowser_native_click":
+        selector = arguments.get("selector")
+        xpath = arguments.get("xpath")
+        index = arguments.get("index")
+
+        if not selector and not xpath:
+            return [TextContent(type="text", text="Error: selector or xpath is required")]
+
+        payload = {}
+        if selector:
+            payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
+        if index is not None:
+            payload["index"] = index
+
+        result = await send_command("command.nativeClick", payload)
+        target = selector or xpath
+        if index is not None:
+            target += f"[{index}]"
+        return format_result(result, f"Native click on: {target}")
+
+    elif name == "cobrowser_native_type":
+        text = arguments.get("text")
+        if not text:
+            return [TextContent(type="text", text="Error: text is required")]
+
+        result = await send_command("command.nativeType", {"text": text})
+        preview = text[:30] + "..." if len(text) > 30 else text
+        return format_result(result, f"Typed (native): {preview}")
+
+    elif name == "cobrowser_native_hotkey":
+        keys = arguments.get("keys")
+        if not keys:
+            return [TextContent(type="text", text="Error: keys array is required")]
+
+        result = await send_command("command.nativeHotkey", {"keys": keys})
+        return format_result(result, f"Pressed hotkey: {'+'.join(keys)}")
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]

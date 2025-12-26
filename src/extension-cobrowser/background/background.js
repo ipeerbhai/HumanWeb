@@ -20,6 +20,23 @@ let messageRouter = null;
 let currentSessionId = null;
 
 /**
+ * Check if native mouse/keyboard control is allowed
+ * @returns {Promise<boolean>}
+ */
+async function isNativeControlAllowed() {
+  const { allowNativeControl } = await browser.storage.local.get('allowNativeControl');
+  return allowNativeControl === true;
+}
+
+/**
+ * Revoke native control permission (called on emergency stop)
+ */
+async function revokeNativeControl() {
+  await browser.storage.local.set({ allowNativeControl: false });
+  console.log('[Co-Browser] Native control permission revoked');
+}
+
+/**
  * Initialize the extension
  */
 async function initialize() {
@@ -52,13 +69,22 @@ async function initialize() {
  * Set up WebSocket event handlers
  */
 function setupWebSocketHandlers() {
-  wsManager.on('connected', (event) => {
+  wsManager.on('connected', async (event) => {
     console.log('[Co-Browser] Connected to service:', event.sessionId);
     currentSessionId = event.sessionId;
 
     // Update badge to show connected
     browser.browserAction.setBadgeText({ text: 'ON' });
     browser.browserAction.setBadgeBackgroundColor({ color: '#4CAF50' });
+
+    // Sync native control permission state with Python server
+    const { allowNativeControl } = await browser.storage.local.get('allowNativeControl');
+    wsManager.send({
+      type: 'native.permission',
+      session_id: currentSessionId,
+      payload: { allowed: allowNativeControl === true }
+    });
+    console.log('[Co-Browser] Synced native permission:', allowNativeControl === true);
 
     // Notify all tabs
     notifyAllTabs({ type: 'connection.established', sessionId: currentSessionId });
@@ -86,6 +112,12 @@ function setupWebSocketHandlers() {
       // Handle navigation in background script (content scripts can't navigate)
       if (message.type === 'command.navigate') {
         await handleNavigateCommand(message);
+      } else if (message.type === 'command.nativeClick') {
+        await handleNativeClickCommand(message);
+      } else if (message.type === 'command.nativeType') {
+        await handleNativeTypeCommand(message);
+      } else if (message.type === 'command.nativeHotkey') {
+        await handleNativeHotkeyCommand(message);
       } else {
         await forwardCommandToActiveTab(message);
       }
@@ -305,6 +337,18 @@ async function handleContentScriptMessage(message, sender) {
       }
       return { success: true };
 
+    case 'native.permission.sync':
+      // Sync native control permission with Python server
+      console.log('[Co-Browser] Native permission sync:', message.allowed);
+      if (currentSessionId) {
+        wsManager.send({
+          type: 'native.permission',
+          session_id: currentSessionId,
+          payload: { allowed: message.allowed }
+        });
+      }
+      return { success: true };
+
     default:
       console.warn('[Co-Browser] Unknown message type:', message.type);
       return { success: false, error: 'Unknown message type' };
@@ -340,6 +384,16 @@ function handleKeyboardCommand(command) {
 
     case 'emergency-stop':
       if (currentSessionId) {
+        // Revoke native mouse/keyboard control permission
+        revokeNativeControl();
+
+        // Cancel any in-progress native automation on the Python server
+        wsManager.send({
+          type: 'native.cancel',
+          session_id: currentSessionId,
+          payload: {}
+        });
+
         sessionManager.setControlMode(currentSessionId, 'HUMAN');
         notifyActiveTab({ type: 'mode.changed', mode: 'HUMAN' });
         wsManager.send({
@@ -382,6 +436,146 @@ async function handleNavigateCommand(message) {
     return { success: false, error: 'No active tab' };
   } catch (error) {
     console.error('[Co-Browser] Navigation failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Handle native click command - uses OS-level mouse click via pyautogui
+ */
+async function handleNativeClickCommand(message) {
+  // Check permission first
+  if (!await isNativeControlAllowed()) {
+    console.warn('[Co-Browser] Native control not allowed');
+    wsManager.send({
+      type: 'command.nativeClick.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: 'Native control not enabled. Enable it in the extension popup.' }
+    });
+    return { success: false, error: 'Native control not enabled' };
+  }
+
+  const { selector, xpath, index } = message.payload || {};
+  console.log('[Co-Browser] Native click:', { selector, xpath, index });
+
+  try {
+    // Get screen coordinates from content script
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length === 0) {
+      throw new Error('No active tab');
+    }
+
+    const coordsResult = await browser.tabs.sendMessage(tabs[0].id, {
+      type: 'command.getScreenCoordinates',
+      payload: { selector, xpath, index }
+    });
+
+    if (!coordsResult.success) {
+      throw new Error(coordsResult.error || 'Failed to get screen coordinates');
+    }
+
+    const { screenX, screenY } = coordsResult;
+
+    // Send native click command to Python server
+    wsManager.send({
+      type: 'native.click',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { screenX, screenY }
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('[Co-Browser] Native click failed:', error);
+    wsManager.send({
+      type: 'command.nativeClick.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Handle native type command - uses OS-level keyboard input via pyautogui
+ */
+async function handleNativeTypeCommand(message) {
+  // Check permission first
+  if (!await isNativeControlAllowed()) {
+    console.warn('[Co-Browser] Native control not allowed');
+    wsManager.send({
+      type: 'command.nativeType.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: 'Native control not enabled. Enable it in the extension popup.' }
+    });
+    return { success: false, error: 'Native control not enabled' };
+  }
+
+  const { text } = message.payload || {};
+  console.log('[Co-Browser] Native type:', text?.substring(0, 50));
+
+  try {
+    // Send native type command to Python server
+    wsManager.send({
+      type: 'native.type',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { text }
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('[Co-Browser] Native type failed:', error);
+    wsManager.send({
+      type: 'command.nativeType.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Handle native hotkey command - uses OS-level key combinations via pyautogui
+ */
+async function handleNativeHotkeyCommand(message) {
+  // Check permission first
+  if (!await isNativeControlAllowed()) {
+    console.warn('[Co-Browser] Native control not allowed');
+    wsManager.send({
+      type: 'command.nativeHotkey.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: 'Native control not enabled. Enable it in the extension popup.' }
+    });
+    return { success: false, error: 'Native control not enabled' };
+  }
+
+  const { keys } = message.payload || {};
+  console.log('[Co-Browser] Native hotkey:', keys);
+
+  try {
+    // Send native hotkey command to Python server
+    wsManager.send({
+      type: 'native.hotkey',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { keys }
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('[Co-Browser] Native hotkey failed:', error);
+    wsManager.send({
+      type: 'command.nativeHotkey.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
     return { success: false, error: error.message };
   }
 }

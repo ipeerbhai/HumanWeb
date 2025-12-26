@@ -160,6 +160,42 @@
       color: #6366f1;
     }
 
+    .permissions {
+      padding: 16px 20px;
+      border-top: 1px solid #e5e7eb;
+      background: white;
+    }
+
+    .permission-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .permission-row input[type="checkbox"] {
+      width: 20px;
+      height: 20px;
+      margin-top: 2px;
+      cursor: pointer;
+    }
+
+    .permission-label {
+      flex: 1;
+    }
+
+    .permission-label .title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 4px;
+    }
+
+    .permission-label .warning {
+      font-size: 13px;
+      color: #dc2626;
+      line-height: 1.4;
+    }
+
     .input-group {
       margin-bottom: 14px;
     }
@@ -215,6 +251,16 @@
     <button id="connect-btn" class="btn btn-primary">Connect</button>
     <button id="disconnect-btn" class="btn btn-secondary" style="display: none;">Disconnect</button>
     <button id="toggle-mode-btn" class="btn btn-secondary" style="display: none;">Switch to Human Control</button>
+  </div>
+
+  <div class="permissions">
+    <div class="permission-row">
+      <input type="checkbox" id="allow-native-control">
+      <div class="permission-label">
+        <div class="title">Allow Mouse/Keyboard Control</div>
+        <div class="warning">⚠️ Enables OS-level automation. Press F8 to emergency stop.</div>
+      </div>
+    </div>
   </div>
 
   <div class="settings">
