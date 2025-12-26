@@ -321,6 +321,23 @@ async def handle_native_hotkey(keys: List[str]) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+async def handle_native_scroll(clicks: int) -> Dict[str, Any]:
+    """Scroll the mouse wheel at current cursor position.
+
+    Args:
+        clicks: Number of scroll clicks. Positive = up, negative = down.
+    """
+    error = check_native_permission()
+    if error:
+        return error
+
+    try:
+        pyautogui.scroll(clicks)
+        return {"success": True, "scrolled": clicks}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 async def handle_native_cancel() -> Dict[str, Any]:
     """Emergency stop - immediately disable all native automation."""
     global native_control_allowed, native_cancel_requested
@@ -861,6 +878,11 @@ async def send_command_sync(session_id: str, command: Dict[str, Any]):
         keys = payload.get("keys", [])
         hotkey_result = await handle_native_hotkey(keys)
         return {"success": hotkey_result.get("success", False), "result": hotkey_result}
+
+    elif command_type == "command.nativeScroll":
+        clicks = payload.get("clicks", -3)  # Default scroll down
+        scroll_result = await handle_native_scroll(clicks)
+        return {"success": scroll_result.get("success", False), "result": scroll_result}
 
     # Standard command - send via WebSocket and wait for response
     result = await service.send_command_and_wait(

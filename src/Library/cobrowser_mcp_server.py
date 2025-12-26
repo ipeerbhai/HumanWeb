@@ -412,6 +412,20 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["keys"]
             }
+        ),
+        Tool(
+            name="cobrowser_native_scroll",
+            description="Scroll the mouse wheel at current cursor position. Use after moving mouse to a scrollable element (like a dropdown). Positive clicks scroll up, negative scroll down. Requires 'Allow Mouse/Keyboard Control' permission.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "clicks": {
+                        "type": "integer",
+                        "description": "Number of scroll clicks. Positive = up, negative = down. Default: -3 (scroll down)"
+                    }
+                },
+                "required": []
+            }
         )
     ]
 
@@ -750,6 +764,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         result = await send_command("command.nativeHotkey", {"keys": keys})
         return format_result(result, f"Pressed hotkey: {'+'.join(keys)}")
+
+    elif name == "cobrowser_native_scroll":
+        clicks = arguments.get("clicks", -3)
+        result = await send_command("command.nativeScroll", {"clicks": clicks})
+        direction = "up" if clicks > 0 else "down"
+        return format_result(result, f"Scrolled {direction} by {abs(clicks)} clicks")
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
