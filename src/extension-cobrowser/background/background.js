@@ -585,6 +585,16 @@ async function handleNativeHotkeyCommand(message) {
  */
 async function forwardCommandToActiveTab(message) {
   const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+
+  const sendErrorResult = (error) => {
+    wsManager.send({
+      type: `${message.type}.result`,
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error }
+    });
+  };
+
   if (tabs.length > 0) {
     try {
       const response = await browser.tabs.sendMessage(tabs[0].id, {
@@ -595,9 +605,12 @@ async function forwardCommandToActiveTab(message) {
       return response;
     } catch (error) {
       console.error('[Co-Browser] Failed to forward command:', error);
+      sendErrorResult(error.message || 'Content script not available');
       return { success: false, error: error.message };
     }
   }
+
+  sendErrorResult('No active tab');
   return { success: false, error: 'No active tab' };
 }
 

@@ -273,10 +273,18 @@ async function handleMessage(message, sender, sendResponse) {
 
       default:
         console.warn('[Co-Browser Content] Unknown message type:', message.type);
+        // Send error result back so server doesn't timeout
+        if (message.correlationId) {
+          sendActionResult(message.type, message.correlationId, { success: false, error: 'Unknown message type' });
+        }
         return { success: false, error: 'Unknown message type' };
     }
   } catch (error) {
     console.error('[Co-Browser Content] Error handling message:', error);
+    // Send error result back to server so it doesn't timeout waiting
+    if (message.correlationId) {
+      sendActionResult(message.type, message.correlationId, { success: false, error: error.message });
+    }
     return { success: false, error: error.message };
   }
 }

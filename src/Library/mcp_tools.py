@@ -1,17 +1,188 @@
 """
-MCP Tools for Co-Browser
+MCP HTTP Server for Co-Browser
 
-Provides Model Context Protocol (MCP) tools for Claude Code to control
-the browser through the Co-Browser extension.
+Fully compliant Model Context Protocol (MCP) Streamable HTTP transport server
+for browser automation with human-in-the-loop support.
+
+Implements:
+- JSON-RPC 2.0 message format
+- Single /mcp endpoint (POST for client→server, GET for SSE server→client)
+- Session management via Mcp-Session-Id header
+- Protocol version negotiation via MCP-Protocol-Version header
+- Standard error codes per JSON-RPC spec
 
 Run with:
     python -m uvicorn src.Library.mcp_tools:app --host 0.0.0.0 --port 8678
 """
 
 import asyncio
-from typing import Dict, List, Any, Optional
-from fastapi import FastAPI, HTTPException
+import json
+import secrets
+import time
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import dataclass, field
+
+from fastapi import FastAPI, HTTPException, Request, Header, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
+
+
+# ============================================
+# Configuration
+# ============================================
+
+SERVER_INFO = {
+    "name": "cobrowser-mcp",
+    "version": "0.2.0"
+}
+
+SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
+LATEST_PROTOCOL_VERSION = "2025-06-18"
+
+# ============================================
+# JSON-RPC 2.0 Models
+# ============================================
+
+class JsonRpcRequest(BaseModel):
+    """JSON-RPC 2.0 Request"""
+    jsonrpc: str = "2.0"
+    id: Optional[Union[str, int]] = None  # None for notifications
+    method: str
+    params: Optional[Dict[str, Any]] = None
+
+
+class JsonRpcResponse(BaseModel):
+    """JSON-RPC 2.0 Response"""
+    jsonrpc: str = "2.0"
+    id: Union[str, int, None]
+    result: Any
+
+
+class JsonRpcErrorDetail(BaseModel):
+    """JSON-RPC 2.0 Error Detail"""
+    code: int
+    message: str
+    data: Optional[Any] = None
+
+
+class JsonRpcErrorResponse(BaseModel):
+    """JSON-RPC 2.0 Error Response"""
+    jsonrpc: str = "2.0"
+    id: Union[str, int, None]
+    error: JsonRpcErrorDetail
+
+
+# JSON-RPC 2.0 Standard Error Codes
+class ErrorCode:
+    PARSE_ERROR = -32700      # Invalid JSON
+    INVALID_REQUEST = -32600  # Not a valid Request object
+    METHOD_NOT_FOUND = -32601 # Method does not exist
+    INVALID_PARAMS = -32602   # Invalid method parameters
+    INTERNAL_ERROR = -32603   # Internal JSON-RPC error
+    # Server errors: -32000 to -32099
+    SERVER_ERROR = -32000
+
+
+def make_error_response(
+    id: Union[str, int, None],
+    code: int,
+    message: str,
+    data: Any = None
+) -> dict:
+    """Create a JSON-RPC error response."""
+    response = {
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message
+        }
+    }
+    if data is not None:
+        response["error"]["data"] = data
+    return response
+
+
+def make_success_response(id: Union[str, int, None], result: Any) -> dict:
+    """Create a JSON-RPC success response."""
+    return {
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    }
+
+
+# ============================================
+# Session Management
+# ============================================
+
+@dataclass
+class McpSession:
+    """Represents an MCP session."""
+    session_id: str
+    created_at: float = field(default_factory=time.time)
+    last_activity: float = field(default_factory=time.time)
+    initialized: bool = False
+    client_info: Optional[Dict[str, Any]] = None
+    protocol_version: str = LATEST_PROTOCOL_VERSION
+    # Queue for server→client messages (for SSE)
+    pending_messages: List[Dict[str, Any]] = field(default_factory=list)
+    # Associated cobrowser session ID
+    cobrowser_session_id: Optional[str] = None
+
+
+class SessionStore:
+    """Manages MCP sessions."""
+
+    def __init__(self):
+        self.sessions: Dict[str, McpSession] = {}
+        self.session_timeout = 3600  # 1 hour
+
+    def create_session(self) -> McpSession:
+        """Create a new session with a cryptographically secure ID."""
+        session_id = secrets.token_urlsafe(32)
+        session = McpSession(session_id=session_id)
+        self.sessions[session_id] = session
+        return session
+
+    def get_session(self, session_id: str) -> Optional[McpSession]:
+        """Get a session by ID."""
+        session = self.sessions.get(session_id)
+        if session:
+            session.last_activity = time.time()
+        return session
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session."""
+        self.sessions.pop(session_id, None)
+
+    def cleanup_expired(self) -> None:
+        """Remove expired sessions."""
+        now = time.time()
+        expired = [
+            sid for sid, session in self.sessions.items()
+            if now - session.last_activity > self.session_timeout
+        ]
+        for sid in expired:
+            del self.sessions[sid]
+
+    def queue_message(self, session_id: str, message: Dict[str, Any]) -> None:
+        """Queue a server→client message for SSE delivery."""
+        session = self.get_session(session_id)
+        if session:
+            session.pending_messages.append(message)
+
+    async def get_pending_message(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get and remove the next pending message for a session."""
+        session = self.get_session(session_id)
+        if session and session.pending_messages:
+            return session.pending_messages.pop(0)
+        return None
+
+
+# Global session store
+session_store = SessionStore()
 
 
 # ============================================
@@ -48,6 +219,10 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "xpath": {
                         "type": "string",
                         "description": "XPath for the element to click (alternative to selector)"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element to click (default: 0)"
                     }
                 }
             }
@@ -91,11 +266,6 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "xpath": {
                         "type": "string",
                         "description": "XPath for the element to read"
-                    },
-                    "property": {
-                        "type": "string",
-                        "description": "Property to read: 'text', 'html', 'value', or an attribute name",
-                        "default": "text"
                     }
                 }
             }
@@ -118,43 +288,34 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "selector": {
                         "type": "string",
                         "description": "Scroll to this element"
-                    },
-                    "to": {
+                    }
+                }
+            }
+        },
+        {
+            "name": "cobrowser_get_page_info",
+            "description": "Get the current page URL and title.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "cobrowser_query_all",
+            "description": "Query all elements matching a selector. Returns info about each element.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": {
                         "type": "string",
-                        "enum": ["top", "bottom"],
-                        "description": "Scroll to top or bottom of page"
-                    }
-                }
-            }
-        },
-        {
-            "name": "cobrowser_screenshot",
-            "description": "Take a screenshot of the current page.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "fullPage": {
-                        "type": "boolean",
-                        "description": "Capture full page (default: false, visible viewport only)"
-                    }
-                }
-            }
-        },
-        {
-            "name": "cobrowser_get_state",
-            "description": "Get the current state of the browser including URL, title, and interactive elements.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "includeDOM": {
-                        "type": "boolean",
-                        "description": "Include cleaned DOM in response (default: false)"
+                        "description": "CSS selector to match elements"
                     },
-                    "includeElements": {
-                        "type": "boolean",
-                        "description": "Include interactive elements list (default: true)"
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of elements to return (default: 20)"
                     }
-                }
+                },
+                "required": ["selector"]
             }
         },
         {
@@ -170,10 +331,6 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "message": {
                         "type": "string",
                         "description": "Message to show the user explaining what's needed"
-                    },
-                    "timeout": {
-                        "type": "number",
-                        "description": "Timeout in seconds before auto-resuming (optional)"
                     }
                 },
                 "required": ["reason", "message"]
@@ -183,341 +340,407 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
 
 
 # ============================================
-# Tool Implementation
+# Protocol Method Handlers
 # ============================================
 
-class CoBrowserTools:
-    """Implementation of Co-Browser MCP tools."""
+async def handle_initialize(
+    session: McpSession,
+    params: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Handle the initialize request."""
+    if session.initialized:
+        raise ValueError("Session already initialized")
 
-    def __init__(self, service, session_id: str):
-        """
-        Initialize tools with a CoBrowserService instance.
+    # Extract client info
+    params = params or {}
+    client_protocol = params.get("protocolVersion", LATEST_PROTOCOL_VERSION)
+    client_info = params.get("clientInfo", {})
 
-        Args:
-            service: CoBrowserService instance
-            session_id: Session ID to operate on
-        """
-        self.service = service
-        self.session_id = session_id
+    # Negotiate protocol version
+    if client_protocol in SUPPORTED_PROTOCOL_VERSIONS:
+        session.protocol_version = client_protocol
+    else:
+        session.protocol_version = LATEST_PROTOCOL_VERSION
 
-    def _check_session(self) -> Optional[Dict[str, Any]]:
-        """Check if session is valid."""
-        if self.session_id not in self.service.active_sessions:
-            return {
-                "success": False,
-                "error": "No active session. Extension may be disconnected."
-            }
-        return None
+    session.client_info = client_info
+    session.initialized = True
 
-    async def navigate(self, url: str) -> Dict[str, Any]:
-        """Navigate to a URL."""
-        error = self._check_session()
-        if error:
-            return error
+    return {
+        "protocolVersion": session.protocol_version,
+        "capabilities": {
+            "tools": {}  # We support tools
+        },
+        "serverInfo": SERVER_INFO
+    }
 
-        try:
-            message_id = await self.service.send_command(
-                self.session_id,
-                "command.navigate",
-                {"url": url}
-            )
-            return {
-                "success": True,
-                "message_id": message_id
-            }
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "error": "Command timeout - extension did not respond"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
 
-    async def click(self, selector: str = None, xpath: str = None) -> Dict[str, Any]:
-        """Click an element."""
-        error = self._check_session()
-        if error:
-            return error
+async def handle_initialized(
+    session: McpSession,
+    params: Optional[Dict[str, Any]]
+) -> None:
+    """Handle the initialized notification (no response needed)."""
+    # Client is confirming it received initialize response
+    pass
 
-        payload = {}
-        if selector:
-            payload["selector"] = selector
-        if xpath:
-            payload["xpath"] = xpath
 
-        try:
-            message_id = await self.service.send_command(
-                self.session_id,
-                "command.click",
-                payload
-            )
-            return {
-                "success": True,
-                "message_id": message_id
-            }
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "error": "Command timeout - extension did not respond"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+async def handle_tools_list(
+    session: McpSession,
+    params: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Handle tools/list request."""
+    if not session.initialized:
+        raise ValueError("Session not initialized")
 
-    async def type(
-        self,
-        text: str,
-        selector: str = None,
-        xpath: str = None,
-        clear: bool = False
-    ) -> Dict[str, Any]:
-        """Type text into an element."""
-        error = self._check_session()
-        if error:
-            return error
+    return {
+        "tools": get_tool_definitions()
+    }
 
-        payload = {"text": text, "clear": clear}
-        if selector:
-            payload["selector"] = selector
-        if xpath:
-            payload["xpath"] = xpath
 
-        try:
-            message_id = await self.service.send_command(
-                self.session_id,
-                "command.type",
-                payload
-            )
-            return {
-                "success": True,
-                "message_id": message_id
-            }
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "error": "Command timeout - extension did not respond"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+async def handle_tools_call(
+    session: McpSession,
+    params: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Handle tools/call request."""
+    if not session.initialized:
+        raise ValueError("Session not initialized")
 
-    async def read(
-        self,
-        selector: str = None,
-        xpath: str = None,
-        property: str = "text"
-    ) -> Dict[str, Any]:
-        """Read content from an element."""
-        error = self._check_session()
-        if error:
-            return error
+    if not params:
+        raise ValueError("Missing params")
 
-        payload = {"property": property}
-        if selector:
-            payload["selector"] = selector
-        if xpath:
-            payload["xpath"] = xpath
+    name = params.get("name")
+    arguments = params.get("arguments", {})
 
-        try:
-            message_id = await self.service.send_command(
-                self.session_id,
-                "command.read",
-                payload
-            )
-            return {
-                "success": True,
-                "message_id": message_id
-            }
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "error": "Command timeout - extension did not respond"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+    if not name:
+        raise ValueError("Missing tool name")
 
-    async def scroll(
-        self,
-        direction: str = None,
-        amount: int = None,
-        selector: str = None,
-        to: str = None
-    ) -> Dict[str, Any]:
-        """Scroll the page."""
-        error = self._check_session()
-        if error:
-            return error
+    # Import cobrowser service to execute tools
+    try:
+        from src.Library.cobrowser_service import service
+    except ImportError:
+        # Service not running
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "success": False,
+                    "error": "CoBrowser service not available"
+                })
+            }],
+            "isError": True
+        }
 
-        payload = {}
-        if direction:
-            payload["direction"] = direction
-        if amount:
-            payload["amount"] = amount
-        if selector:
-            payload["selector"] = selector
-        if to:
-            payload["to"] = to
+    # Get active cobrowser session
+    active_sessions = list(service.active_sessions.keys())
+    if not active_sessions:
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "success": False,
+                    "error": "No active browser session. Make sure the extension is connected."
+                })
+            }],
+            "isError": True
+        }
 
-        try:
-            message_id = await self.service.send_command(
-                self.session_id,
-                "command.scroll",
-                payload
-            )
-            return {
-                "success": True,
-                "message_id": message_id
-            }
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "error": "Command timeout - extension did not respond"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+    cobrowser_session_id = active_sessions[0]
+    session.cobrowser_session_id = cobrowser_session_id
 
-    async def screenshot(self, fullPage: bool = False) -> Dict[str, Any]:
-        """Take a screenshot."""
-        error = self._check_session()
-        if error:
-            return error
+    # Map tool names to command types
+    tool_to_command = {
+        "cobrowser_navigate": ("command.navigate", lambda a: {"url": a.get("url")}),
+        "cobrowser_click": ("command.click", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_type": ("command.type", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_read": ("command.read", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_scroll": ("command.scroll", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_get_page_info": ("command.getState", lambda a: {}),
+        "cobrowser_query_all": ("command.queryAll", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_request_human": ("handoff.request", lambda a: {k: v for k, v in a.items() if v is not None}),
+    }
 
-        try:
-            message_id = await self.service.send_command(
-                self.session_id,
-                "command.screenshot",
-                {"fullPage": fullPage}
-            )
-            return {
-                "success": True,
-                "message_id": message_id
-            }
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "error": "Command timeout - extension did not respond"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+    if name not in tool_to_command:
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "success": False,
+                    "error": f"Unknown tool: {name}"
+                })
+            }],
+            "isError": True
+        }
 
-    async def get_state(
-        self,
-        includeDOM: bool = False,
-        includeElements: bool = True
-    ) -> Dict[str, Any]:
-        """Get current browser state."""
-        state = self.service.get_session_state(self.session_id)
-        if not state:
-            return {
-                "success": False,
-                "error": "Session not found"
-            }
-        return state
+    command_type, payload_fn = tool_to_command[name]
+    payload = payload_fn(arguments)
 
-    async def request_human(
-        self,
-        reason: str,
-        message: str,
-        timeout: int = None
-    ) -> Dict[str, Any]:
-        """Request human assistance."""
-        self.service.set_control_mode(self.session_id, "HUMAN")
+    try:
+        result = await service.send_command_and_wait(
+            cobrowser_session_id,
+            command_type,
+            payload,
+            timeout=30.0
+        )
 
-        # Send handoff request to extension
-        try:
-            await self.service.send_command(
-                self.session_id,
-                "handoff.request",
-                {
-                    "reason": reason,
-                    "message": message,
-                    "timeout": timeout
-                }
-            )
-            return {
-                "success": True,
-                "message": f"Handoff requested: {message}"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps(result)
+            }],
+            "isError": not result.get("success", False)
+        }
+    except asyncio.TimeoutError:
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "success": False,
+                    "error": "Command timed out"
+                })
+            }],
+            "isError": True
+        }
+    except Exception as e:
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "success": False,
+                    "error": str(e)
+                })
+            }],
+            "isError": True
+        }
+
+
+async def handle_ping(
+    session: McpSession,
+    params: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Handle ping request."""
+    return {}
+
+
+# Method router
+METHOD_HANDLERS = {
+    "initialize": handle_initialize,
+    "initialized": handle_initialized,  # Notification
+    "tools/list": handle_tools_list,
+    "tools/call": handle_tools_call,
+    "ping": handle_ping,
+}
 
 
 # ============================================
-# FastAPI MCP Server
+# FastAPI Application
 # ============================================
 
 app = FastAPI(
-    title="Co-Browser MCP Server",
-    description="MCP tools for browser automation with human-in-the-loop",
-    version="0.1.0"
+    title="Co-Browser MCP HTTP Server",
+    description="MCP Streamable HTTP transport server for browser automation",
+    version="0.2.0"
 )
-
-
-class ToolCallRequest(BaseModel):
-    name: str
-    arguments: Dict[str, Any] = {}
-    session_id: str
 
 
 @app.get("/")
 def read_root():
     """Health check."""
-    return {"status": "ok", "service": "cobrowser-mcp"}
+    return {"status": "ok", "service": "cobrowser-mcp", "version": SERVER_INFO["version"]}
+
+
+@app.post("/mcp")
+async def mcp_post(
+    request: Request,
+    mcp_session_id: Optional[str] = Header(None, alias="Mcp-Session-Id"),
+    mcp_protocol_version: Optional[str] = Header(None, alias="MCP-Protocol-Version")
+):
+    """
+    MCP POST endpoint - handles client→server JSON-RPC messages.
+
+    Supports:
+    - initialize: Start a new session
+    - tools/list: List available tools
+    - tools/call: Execute a tool
+    - ping: Health check
+    """
+    # Parse request body
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as e:
+        return JSONResponse(
+            status_code=200,  # JSON-RPC errors use 200 status
+            content=make_error_response(None, ErrorCode.PARSE_ERROR, f"Parse error: {e}")
+        )
+
+    # Validate JSON-RPC structure
+    if not isinstance(body, dict):
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(None, ErrorCode.INVALID_REQUEST, "Request must be an object")
+        )
+
+    jsonrpc = body.get("jsonrpc")
+    request_id = body.get("id")  # May be None for notifications
+    method = body.get("method")
+    params = body.get("params")
+
+    if jsonrpc != "2.0":
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(request_id, ErrorCode.INVALID_REQUEST, "jsonrpc must be '2.0'")
+        )
+
+    if not method or not isinstance(method, str):
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(request_id, ErrorCode.INVALID_REQUEST, "method must be a string")
+        )
+
+    # Handle initialize specially - creates new session
+    if method == "initialize":
+        session = session_store.create_session()
+        try:
+            result = await handle_initialize(session, params)
+            response = JSONResponse(
+                status_code=200,
+                content=make_success_response(request_id, result)
+            )
+            response.headers["Mcp-Session-Id"] = session.session_id
+            return response
+        except Exception as e:
+            session_store.delete_session(session.session_id)
+            return JSONResponse(
+                status_code=200,
+                content=make_error_response(request_id, ErrorCode.INTERNAL_ERROR, str(e))
+            )
+
+    # All other methods require a session
+    if not mcp_session_id:
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(request_id, ErrorCode.INVALID_REQUEST, "Mcp-Session-Id header required")
+        )
+
+    session = session_store.get_session(mcp_session_id)
+    if not session:
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(request_id, ErrorCode.INVALID_REQUEST, "Invalid or expired session")
+        )
+
+    # Find handler
+    handler = METHOD_HANDLERS.get(method)
+    if not handler:
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(request_id, ErrorCode.METHOD_NOT_FOUND, f"Method not found: {method}")
+        )
+
+    # Execute handler
+    try:
+        result = await handler(session, params)
+
+        # Notifications (no id) don't get responses
+        if request_id is None:
+            return Response(status_code=202)
+
+        return JSONResponse(
+            status_code=200,
+            content=make_success_response(request_id, result)
+        )
+    except ValueError as e:
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(request_id, ErrorCode.INVALID_PARAMS, str(e))
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=200,
+            content=make_error_response(request_id, ErrorCode.INTERNAL_ERROR, str(e))
+        )
+
+
+@app.get("/mcp")
+async def mcp_get(
+    request: Request,
+    mcp_session_id: Optional[str] = Header(None, alias="Mcp-Session-Id"),
+    last_event_id: Optional[str] = Header(None, alias="Last-Event-ID")
+):
+    """
+    MCP GET endpoint - SSE stream for server→client messages.
+
+    Used for:
+    - Server-initiated notifications
+    - Progress updates
+    - Resource change notifications
+    """
+    # Check Accept header
+    accept = request.headers.get("Accept", "")
+    if "text/event-stream" not in accept:
+        raise HTTPException(status_code=406, detail="Must accept text/event-stream")
+
+    if not mcp_session_id:
+        raise HTTPException(status_code=400, detail="Mcp-Session-Id header required")
+
+    session = session_store.get_session(mcp_session_id)
+    if not session:
+        raise HTTPException(status_code=400, detail="Invalid or expired session")
+
+    async def event_generator():
+        """Generate SSE events for pending messages."""
+        event_id = 0
+        while True:
+            # Check for pending messages
+            message = await session_store.get_pending_message(mcp_session_id)
+            if message:
+                event_id += 1
+                yield {
+                    "event": "message",
+                    "id": str(event_id),
+                    "data": json.dumps(message)
+                }
+            else:
+                # Send keepalive comment every 30 seconds
+                yield {"comment": "keepalive"}
+            await asyncio.sleep(0.5)
+
+    return EventSourceResponse(event_generator())
+
+
+# ============================================
+# Legacy Endpoints (Backward Compatibility)
+# ============================================
+
+class LegacyToolCallRequest(BaseModel):
+    name: str
+    arguments: Dict[str, Any] = {}
+    session_id: str
 
 
 @app.get("/mcp/tools")
-def list_tools():
-    """List available MCP tools."""
+def list_tools_legacy():
+    """[DEPRECATED] List available MCP tools. Use POST /mcp with tools/list method."""
     return {"tools": get_tool_definitions()}
 
 
 @app.post("/mcp/call")
-async def call_tool(request: ToolCallRequest):
+async def call_tool_legacy(request: LegacyToolCallRequest):
     """
-    Call an MCP tool.
-
-    This endpoint is called by Claude Code to execute browser actions.
+    [DEPRECATED] Call an MCP tool. Use POST /mcp with tools/call method.
     """
     # Import here to avoid circular imports
     from src.Library.cobrowser_service import service
 
-    tools = CoBrowserTools(service, request.session_id)
+    if request.session_id not in service.active_sessions:
+        raise HTTPException(status_code=400, detail="No active session")
 
-    tool_map = {
-        "cobrowser_navigate": tools.navigate,
-        "cobrowser_click": tools.click,
-        "cobrowser_type": tools.type,
-        "cobrowser_read": tools.read,
-        "cobrowser_scroll": tools.scroll,
-        "cobrowser_screenshot": tools.screenshot,
-        "cobrowser_get_state": tools.get_state,
-        "cobrowser_request_human": tools.request_human
-    }
+    # Create a temporary MCP session
+    session = McpSession(session_id="legacy", initialized=True)
+    session.cobrowser_session_id = request.session_id
 
-    if request.name not in tool_map:
-        raise HTTPException(status_code=404, detail=f"Unknown tool: {request.name}")
-
-    handler = tool_map[request.name]
-    result = await handler(**request.arguments)
+    result = await handle_tools_call(session, {
+        "name": request.name,
+        "arguments": request.arguments
+    })
 
     return {"result": result}
 

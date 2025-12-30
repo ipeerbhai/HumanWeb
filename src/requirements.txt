@@ -6,6 +6,7 @@ pydantic>=1.10.8
 python-jose>=3.3.0
 selenium>=4.12.0
 starlette>=0.27.0
+sse-starlette>=2.0.0
 streamlit>=1.38.0
 uvicorn>=0.22.0
 anthropic>=0.34.2

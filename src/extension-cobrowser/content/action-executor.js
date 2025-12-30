@@ -82,8 +82,8 @@ class ActionExecutor {
         };
       }
 
-      // Scroll into view first
-      element.scrollIntoView({ behavior: 'instant', block: 'center' });
+      // Scroll into view first (including parent overflow containers)
+      this.scrollIntoViewRecursive(element, 'instant');
       await new Promise(resolve => setTimeout(resolve, 100));
 
       const coords = this.getScreenCoordinates(element);
@@ -219,6 +219,42 @@ class ActionExecutor {
   }
 
   /**
+   * Scroll element into view, including scrolling all parent overflow containers.
+   * Standard scrollIntoView() may not scroll parent containers with overflow.
+   * @param {Element} element
+   * @param {string} behavior - 'instant' or 'smooth'
+   */
+  scrollIntoViewRecursive(element, behavior = 'smooth') {
+    // Walk up the DOM, scrolling each overflow container
+    let current = element;
+    let parent = current.parentElement;
+
+    while (parent && parent !== document.body && parent !== document.documentElement) {
+      const style = window.getComputedStyle(parent);
+      const isScrollable =
+        style.overflowY === 'auto' || style.overflowY === 'scroll' ||
+        style.overflow === 'auto' || style.overflow === 'scroll';
+
+      if (isScrollable && parent.scrollHeight > parent.clientHeight) {
+        // Scroll parent to center the element within it
+        const elementRect = current.getBoundingClientRect();
+        const parentRect = parent.getBoundingClientRect();
+        const elementCenter = elementRect.top + elementRect.height / 2;
+        const parentCenter = parentRect.top + parentRect.height / 2;
+        const scrollOffset = elementCenter - parentCenter;
+
+        parent.scrollTop += scrollOffset;
+      }
+
+      current = parent;
+      parent = parent.parentElement;
+    }
+
+    // Finally scroll into viewport
+    element.scrollIntoView({ behavior, block: 'center' });
+  }
+
+  /**
    * Execute a click action
    * @param {object} options - { selector, xpath, x, y, highlight }
    * @returns {Promise<object>} - { success, error }
@@ -242,9 +278,9 @@ class ActionExecutor {
         };
       }
 
-      // Scroll into view (skip for coordinate-based clicks on canvas)
+      // Scroll into view including parent overflow containers (skip for coordinate-based clicks on canvas)
       if (!options.x && !options.y) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        this.scrollIntoViewRecursive(element, 'smooth');
       }
 
       // Highlight if requested
@@ -349,9 +385,9 @@ class ActionExecutor {
         };
       }
 
-      // Scroll into view (skip for coordinate-based clicks on canvas)
+      // Scroll into view including parent overflow containers (skip for coordinate-based clicks on canvas)
       if (!options.x && !options.y) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        this.scrollIntoViewRecursive(element, 'smooth');
       }
 
       // Highlight if requested
@@ -463,9 +499,9 @@ class ActionExecutor {
         };
       }
 
-      // Scroll into view (skip for coordinate-based clicks on canvas)
+      // Scroll into view including parent overflow containers (skip for coordinate-based clicks on canvas)
       if (!options.x && !options.y) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        this.scrollIntoViewRecursive(element, 'smooth');
       }
 
       // Highlight if requested
@@ -580,8 +616,8 @@ class ActionExecutor {
         };
       }
 
-      // Scroll source into view
-      sourceElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Scroll source into view including parent overflow containers
+      this.scrollIntoViewRecursive(sourceElement, 'smooth');
 
       // Highlight if requested
       if (options.highlight) {
@@ -705,7 +741,7 @@ class ActionExecutor {
    */
   async scroll(options) {
     try {
-      // Scroll to element
+      // Scroll to element including parent overflow containers
       if (options.selector) {
         const element = this.findElement(options);
         if (!element) {
@@ -714,7 +750,7 @@ class ActionExecutor {
             error: `Element not found: ${this.describeTarget(options)}`
           };
         }
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        this.scrollIntoViewRecursive(element, 'smooth');
         return { success: true };
       }
 
