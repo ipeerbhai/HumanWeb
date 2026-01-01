@@ -22,10 +22,15 @@ import time
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass, field
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Header, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+
+
+# CoBrowser service URL (the WebSocket backend)
+COBROWSER_SERVICE_URL = "http://localhost:8677"
 
 
 # ============================================
@@ -228,6 +233,82 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
             }
         },
         {
+            "name": "cobrowser_doubleclick",
+            "description": "Double-click an element on the page. Use for opening dialogs, search boxes in canvas UIs like ComfyUI. For canvas elements, use x,y coordinates.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element to double-click"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
+                    },
+                    "x": {
+                        "type": "number",
+                        "description": "X coordinate (viewport) - use with y for canvas elements"
+                    },
+                    "y": {
+                        "type": "number",
+                        "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    }
+                }
+            }
+        },
+        {
+            "name": "cobrowser_rightclick",
+            "description": "Right-click an element to open a context menu. For canvas elements, use x,y coordinates.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element to right-click"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
+                    },
+                    "x": {
+                        "type": "number",
+                        "description": "X coordinate (viewport) - use with y for canvas elements"
+                    },
+                    "y": {
+                        "type": "number",
+                        "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    }
+                }
+            }
+        },
+        {
+            "name": "cobrowser_drag",
+            "description": "Drag an element from one location to another. Use for connecting nodes in canvas UIs, moving elements, or drag-and-drop operations.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the source element to drag"
+                    },
+                    "targetSelector": {
+                        "type": "string",
+                        "description": "CSS selector for the target element to drop on"
+                    },
+                    "targetX": {
+                        "type": "number",
+                        "description": "Target X coordinate (alternative to targetSelector)"
+                    },
+                    "targetY": {
+                        "type": "number",
+                        "description": "Target Y coordinate (alternative to targetSelector)"
+                    }
+                },
+                "required": ["selector"]
+            }
+        },
+        {
             "name": "cobrowser_type",
             "description": "Type text into an input field. Cannot type into password fields for security.",
             "inputSchema": {
@@ -319,6 +400,14 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
             }
         },
         {
+            "name": "cobrowser_screenshot",
+            "description": "Take a screenshot of the current visible browser tab.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
             "name": "cobrowser_request_human",
             "description": "Request human assistance. Use when encountering CAPTCHAs, login pages, or sensitive actions.",
             "inputSchema": {
@@ -334,6 +423,112 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     }
                 },
                 "required": ["reason", "message"]
+            }
+        },
+        {
+            "name": "cobrowser_get_user_requests",
+            "description": "Get pending user requests from the browser. Users can right-click and 'Ask Claude...' to send natural language requests. Check this periodically to see if users need help.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "cobrowser_clear_user_request",
+            "description": "Clear a user request after you've handled it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "request_id": {
+                        "type": "string",
+                        "description": "The ID of the request to clear"
+                    }
+                },
+                "required": ["request_id"]
+            }
+        },
+        {
+            "name": "cobrowser_native_click",
+            "description": "Perform an OS-level mouse click on an element. Use this for buttons that open popups (like LinkedIn Apply) which don't work with synthetic clicks. Requires 'Allow Mouse/Keyboard Control' permission in the extension popup.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element to click"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element to click (default: 0)"
+                    }
+                }
+            }
+        },
+        {
+            "name": "cobrowser_native_move",
+            "description": "Move the mouse to an element without clicking. Use for debugging native click positioning. Requires 'Allow Mouse/Keyboard Control' permission.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element"
+                    },
+                    "xpath": {
+                        "type": "string",
+                        "description": "XPath expression for the element"
+                    },
+                    "index": {
+                        "type": "number",
+                        "description": "0-based index of which matching element (default: 0)"
+                    }
+                }
+            }
+        },
+        {
+            "name": "cobrowser_native_type",
+            "description": "Type text using OS-level keyboard input. Use this for file upload dialogs and other native OS dialogs that don't accept synthetic events. Requires 'Allow Mouse/Keyboard Control' permission.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type (e.g., file path for file dialogs)"
+                    }
+                },
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "cobrowser_native_hotkey",
+            "description": "Press a keyboard hotkey combination using OS-level input. Use for keyboard shortcuts in native dialogs. Requires 'Allow Mouse/Keyboard Control' permission.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Keys to press together (e.g., ['ctrl', 'l'] or ['enter'])"
+                    }
+                },
+                "required": ["keys"]
+            }
+        },
+        {
+            "name": "cobrowser_native_scroll",
+            "description": "Scroll the mouse wheel at current cursor position. Use after moving mouse to a scrollable element (like a dropdown). Positive clicks scroll up, negative scroll down. Requires 'Allow Mouse/Keyboard Control' permission.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "clicks": {
+                        "type": "integer",
+                        "description": "Number of scroll clicks. Positive = up, negative = down. Default: -3 (scroll down)"
+                    }
+                }
             }
         }
     ]
@@ -413,49 +608,27 @@ async def handle_tools_call(
     if not name:
         raise ValueError("Missing tool name")
 
-    # Import cobrowser service to execute tools
-    try:
-        from src.Library.cobrowser_service import service
-    except ImportError:
-        # Service not running
-        return {
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "success": False,
-                    "error": "CoBrowser service not available"
-                })
-            }],
-            "isError": True
-        }
-
-    # Get active cobrowser session
-    active_sessions = list(service.active_sessions.keys())
-    if not active_sessions:
-        return {
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "success": False,
-                    "error": "No active browser session. Make sure the extension is connected."
-                })
-            }],
-            "isError": True
-        }
-
-    cobrowser_session_id = active_sessions[0]
-    session.cobrowser_session_id = cobrowser_session_id
-
     # Map tool names to command types
     tool_to_command = {
         "cobrowser_navigate": ("command.navigate", lambda a: {"url": a.get("url")}),
         "cobrowser_click": ("command.click", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_doubleclick": ("command.doubleclick", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_rightclick": ("command.rightclick", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_drag": ("command.drag", lambda a: {k: v for k, v in a.items() if v is not None}),
         "cobrowser_type": ("command.type", lambda a: {k: v for k, v in a.items() if v is not None}),
         "cobrowser_read": ("command.read", lambda a: {k: v for k, v in a.items() if v is not None}),
         "cobrowser_scroll": ("command.scroll", lambda a: {k: v for k, v in a.items() if v is not None}),
         "cobrowser_get_page_info": ("command.getState", lambda a: {}),
         "cobrowser_query_all": ("command.queryAll", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_screenshot": ("command.screenshot", lambda a: {k: v for k, v in a.items() if v is not None}),
         "cobrowser_request_human": ("handoff.request", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_get_user_requests": ("user_requests.list", lambda a: {}),
+        "cobrowser_clear_user_request": ("user_requests.clear", lambda a: {"request_id": a.get("request_id")}),
+        "cobrowser_native_click": ("command.nativeClick", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_native_move": ("command.nativeMove", lambda a: {k: v for k, v in a.items() if v is not None}),
+        "cobrowser_native_type": ("command.nativeType", lambda a: {"text": a.get("text")}),
+        "cobrowser_native_hotkey": ("command.nativeHotkey", lambda a: {"keys": a.get("keys")}),
+        "cobrowser_native_scroll": ("command.nativeScroll", lambda a: {"clicks": a.get("clicks", -3)}),
     }
 
     if name not in tool_to_command:
@@ -474,27 +647,77 @@ async def handle_tools_call(
     payload = payload_fn(arguments)
 
     try:
-        result = await service.send_command_and_wait(
-            cobrowser_session_id,
-            command_type,
-            payload,
-            timeout=30.0
-        )
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            # Get active sessions from cobrowser service
+            sessions_resp = await client.get(f"{COBROWSER_SERVICE_URL}/v1/cobrowser/sessions/active")
+            if sessions_resp.status_code != 200:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": json.dumps({
+                            "success": False,
+                            "error": "CoBrowser service not available"
+                        })
+                    }],
+                    "isError": True
+                }
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": json.dumps(result)
-            }],
-            "isError": not result.get("success", False)
-        }
-    except asyncio.TimeoutError:
+            sessions_data = sessions_resp.json()
+            active_sessions = sessions_data.get("sessions", [])
+
+            if not active_sessions:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": json.dumps({
+                            "success": False,
+                            "error": "No active browser session. Make sure the extension is connected."
+                        })
+                    }],
+                    "isError": True
+                }
+
+            # Use first active session (sessions are just ID strings)
+            cobrowser_session_id = active_sessions[0]
+            session.cobrowser_session_id = cobrowser_session_id
+
+            # Send command via HTTP to cobrowser service
+            cmd_resp = await client.post(
+                f"{COBROWSER_SERVICE_URL}/v1/cobrowser/command/{cobrowser_session_id}/sync",
+                json={
+                    "type": command_type,
+                    "payload": payload
+                }
+            )
+
+            result = cmd_resp.json()
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(result)
+                }],
+                "isError": not result.get("success", False)
+            }
+
+    except httpx.TimeoutException:
         return {
             "content": [{
                 "type": "text",
                 "text": json.dumps({
                     "success": False,
                     "error": "Command timed out"
+                })
+            }],
+            "isError": True
+        }
+    except httpx.ConnectError:
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "success": False,
+                    "error": "Cannot connect to CoBrowser service. Is it running on port 8677?"
                 })
             }],
             "isError": True
@@ -727,12 +950,6 @@ async def call_tool_legacy(request: LegacyToolCallRequest):
     """
     [DEPRECATED] Call an MCP tool. Use POST /mcp with tools/call method.
     """
-    # Import here to avoid circular imports
-    from src.Library.cobrowser_service import service
-
-    if request.session_id not in service.active_sessions:
-        raise HTTPException(status_code=400, detail="No active session")
-
     # Create a temporary MCP session
     session = McpSession(session_id="legacy", initialized=True)
     session.cobrowser_session_id = request.session_id

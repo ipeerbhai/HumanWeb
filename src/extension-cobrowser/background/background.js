@@ -112,6 +112,8 @@ function setupWebSocketHandlers() {
       // Handle navigation in background script (content scripts can't navigate)
       if (message.type === 'command.navigate') {
         await handleNavigateCommand(message);
+      } else if (message.type === 'command.screenshot') {
+        await handleScreenshotCommand(message);
       } else if (message.type === 'command.nativeClick') {
         await handleNativeClickCommand(message);
       } else if (message.type === 'command.nativeType') {
@@ -436,6 +438,43 @@ async function handleNavigateCommand(message) {
     return { success: false, error: 'No active tab' };
   } catch (error) {
     console.error('[Co-Browser] Navigation failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Handle screenshot command - captures visible tab as PNG
+ */
+async function handleScreenshotCommand(message) {
+  console.log('[Co-Browser] Taking screenshot');
+
+  try {
+    // Capture the visible tab as a PNG data URL
+    const dataUrl = await browser.tabs.captureVisibleTab(null, {
+      format: 'png'
+    });
+
+    // Send success response with screenshot data
+    wsManager.send({
+      type: 'command.screenshot.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: {
+        success: true,
+        dataUrl: dataUrl,
+        format: 'png'
+      }
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('[Co-Browser] Screenshot failed:', error);
+    wsManager.send({
+      type: 'command.screenshot.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
     return { success: false, error: error.message };
   }
 }
