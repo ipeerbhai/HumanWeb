@@ -91,10 +91,10 @@ describe('ActionExecutor', () => {
     });
 
     test('clicks at coordinates', async () => {
-      const mockClick = jest.fn();
+      const mockDispatchEvent = jest.fn();
       document.elementFromPoint = jest.fn(() => {
         const el = createMockElement('div');
-        el.click = mockClick;
+        el.dispatchEvent = mockDispatchEvent;
         return el;
       });
 
@@ -102,7 +102,12 @@ describe('ActionExecutor', () => {
 
       expect(result.success).toBe(true);
       expect(document.elementFromPoint).toHaveBeenCalledWith(150, 200);
-      expect(mockClick).toHaveBeenCalled();
+      // Coordinate-based clicks use synthetic MouseEvents (not element.click())
+      // This is intentional for precision clicking on canvas elements
+      expect(mockDispatchEvent).toHaveBeenCalled();
+      // Verify click event was dispatched
+      const clickCall = mockDispatchEvent.mock.calls.find(call => call[0].type === 'click');
+      expect(clickCall).toBeTruthy();
     });
 
     test('rejects click on password field', async () => {

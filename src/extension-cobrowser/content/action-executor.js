@@ -38,14 +38,29 @@ class ActionExecutor {
 
   /**
    * Get screen coordinates for an element (for native mouse automation)
+   * Handles elements in iframes by adding iframe offset
    * @param {Element} element
    * @returns {object} - { screenX, screenY }
    */
   getScreenCoordinates(element) {
     const rect = element.getBoundingClientRect();
-    // Viewport coordinates + window position on screen
-    const screenX = window.screenX + rect.left + rect.width / 2;
-    const screenY = window.screenY + rect.top + rect.height / 2;
+
+    // Start with element position relative to its document viewport
+    let offsetX = rect.left + rect.width / 2;
+    let offsetY = rect.top + rect.height / 2;
+
+    // If element is in an iframe, add the iframe's position
+    const iframe = element._cobrowserIframe;
+    if (iframe) {
+      const iframeRect = iframe.getBoundingClientRect();
+      offsetX += iframeRect.left;
+      offsetY += iframeRect.top;
+    }
+
+    // Add window position on screen
+    const screenX = window.screenX + offsetX;
+    const screenY = window.screenY + offsetY;
+
     return {
       screenX,
       screenY,
@@ -61,24 +76,36 @@ class ActionExecutor {
         rectLeft: rect.left,
         rectTop: rect.top,
         rectWidth: rect.width,
-        rectHeight: rect.height
+        rectHeight: rect.height,
+        inIframe: !!iframe,
+        iframeOffset: iframe ? { left: iframe.getBoundingClientRect().left, top: iframe.getBoundingClientRect().top } : null
       }
     };
   }
 
   /**
    * Get screen coordinates for an element by selector/xpath
+   * Uses retry logic for dynamically loaded content
    * @param {object} options - { selector, xpath, index }
    * @returns {object} - { success, screenX, screenY, error }
    */
   async getElementScreenCoordinates(options) {
     try {
-      const element = this.findElement(options);
+      // Use retry logic for dynamic content (e.g., LinkedIn job details pane)
+      const element = await this.findElementWithRetry(options);
 
       if (!element) {
         return {
           success: false,
           error: `Element not found: ${this.describeTarget(options)}`
+        };
+      }
+
+      // Check if element has valid geometry
+      if (!this.hasValidGeometry(element)) {
+        return {
+          success: false,
+          error: `Element found but has no dimensions (may be hidden): ${this.describeTarget(options)}`
         };
       }
 
@@ -102,7 +129,86 @@ class ActionExecutor {
   }
 
   /**
-   * Find an element by selector or XPath
+   * Check if an element has valid geometry (is rendered and visible)
+   * @param {Element} element
+   * @returns {boolean}
+   */
+  hasValidGeometry(element) {
+    if (!element || !element.getBoundingClientRect) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  /**
+   * Find element in shadow DOM trees recursively
+   * @param {string} selector - CSS selector
+   * @param {Document|ShadowRoot} root - Root to search from
+   * @param {number} index - Which match to return
+   * @returns {Element|null}
+   */
+  findInShadowDOM(selector, root = document, index = 0) {
+    // First check light DOM at this level
+    const elements = root.querySelectorAll(selector);
+    if (elements.length > index) {
+      return elements[index];
+    }
+
+    // Track how many we've found so far for index calculation
+    let foundCount = elements.length;
+
+    // Recursively search shadow DOM trees
+    const allElements = root.querySelectorAll('*');
+    for (const el of allElements) {
+      if (el.shadowRoot) {
+        const found = this.findInShadowDOM(selector, el.shadowRoot, index - foundCount);
+        if (found) return found;
+        // Count elements in this shadow root for index tracking
+        foundCount += el.shadowRoot.querySelectorAll(selector).length;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find element in same-origin iframes
+   * @param {string} selector - CSS selector
+   * @param {number} index - Which match to return
+   * @returns {{element: Element, iframe: HTMLIFrameElement}|null}
+   */
+  findInIframes(selector, index = 0) {
+    let foundCount = 0;
+    const iframes = document.querySelectorAll('iframe');
+
+    for (const iframe of iframes) {
+      try {
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (!iframeDoc) continue;
+
+        const elements = iframeDoc.querySelectorAll(selector);
+        if (elements.length > 0) {
+          const targetIndex = index - foundCount;
+          if (targetIndex < elements.length) {
+            return { element: elements[targetIndex], iframe };
+          }
+          foundCount += elements.length;
+        }
+
+        // Also check shadow DOM within iframes
+        const shadowEl = this.findInShadowDOM(selector, iframeDoc, index - foundCount);
+        if (shadowEl) {
+          return { element: shadowEl, iframe };
+        }
+      } catch (e) {
+        // Cross-origin iframe - skip silently
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find an element by selector or XPath, searching shadow DOM and iframes
    * @param {object} options - { selector, xpath, index, x, y }
    * @returns {Element|null}
    */
@@ -110,14 +216,31 @@ class ActionExecutor {
     const index = options.index || 0;
 
     if (options.selector) {
+      // 1. Try main document light DOM first
       const elements = document.querySelectorAll(options.selector);
-      if (index >= elements.length) {
-        return null;
+      if (elements.length > index) {
+        return elements[index];
       }
-      return elements[index];
+
+      // 2. Try shadow DOM trees
+      const shadowEl = this.findInShadowDOM(options.selector, document, index);
+      if (shadowEl) {
+        return shadowEl;
+      }
+
+      // 3. Try same-origin iframes
+      const iframeResult = this.findInIframes(options.selector, index);
+      if (iframeResult) {
+        // Store iframe reference for coordinate calculation
+        iframeResult.element._cobrowserIframe = iframeResult.iframe;
+        return iframeResult.element;
+      }
+
+      return null;
     }
 
     if (options.xpath) {
+      // Try main document first
       const result = document.evaluate(
         options.xpath,
         document,
@@ -125,10 +248,40 @@ class ActionExecutor {
         XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
         null
       );
-      if (index >= result.snapshotLength) {
-        return null;
+      if (result.snapshotLength > index) {
+        return result.snapshotItem(index);
       }
-      return result.snapshotItem(index);
+
+      // Try same-origin iframes for XPath
+      const iframes = document.querySelectorAll('iframe');
+      let foundCount = result.snapshotLength;
+
+      for (const iframe of iframes) {
+        try {
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (!iframeDoc) continue;
+
+          const iframeResult = iframeDoc.evaluate(
+            options.xpath,
+            iframeDoc,
+            null,
+            XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+            null
+          );
+
+          const targetIndex = index - foundCount;
+          if (iframeResult.snapshotLength > targetIndex && targetIndex >= 0) {
+            const element = iframeResult.snapshotItem(targetIndex);
+            element._cobrowserIframe = iframe;
+            return element;
+          }
+          foundCount += iframeResult.snapshotLength;
+        } catch (e) {
+          // Cross-origin or XPath error - skip
+        }
+      }
+
+      return null;
     }
 
     if (options.x !== undefined && options.y !== undefined) {
@@ -136,6 +289,32 @@ class ActionExecutor {
     }
 
     return null;
+  }
+
+  /**
+   * Find element with retry for dynamically loaded content
+   * @param {object} options - { selector, xpath, index, x, y }
+   * @param {number} maxWait - Maximum wait time in ms (default 3000)
+   * @param {number} interval - Retry interval in ms (default 100)
+   * @returns {Promise<Element|null>}
+   */
+  async findElementWithRetry(options, maxWait = 3000, interval = 100) {
+    const start = Date.now();
+
+    while (Date.now() - start < maxWait) {
+      const element = this.findElement(options);
+
+      // Found element with valid geometry - return it
+      if (element && this.hasValidGeometry(element)) {
+        return element;
+      }
+
+      // Wait before next attempt
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
+
+    // Final attempt without geometry check (element might be intentionally hidden)
+    return this.findElement(options);
   }
 
   /**
@@ -256,12 +435,17 @@ class ActionExecutor {
 
   /**
    * Execute a click action
+   * Uses retry logic for dynamically loaded content
    * @param {object} options - { selector, xpath, x, y, highlight }
    * @returns {Promise<object>} - { success, error }
    */
   async click(options) {
     try {
-      const element = this.findElement(options);
+      // Use retry for selector/xpath based clicks (not coordinate-based)
+      const isCoordinateClick = options.x !== undefined && options.y !== undefined;
+      const element = isCoordinateClick
+        ? this.findElement(options)
+        : await this.findElementWithRetry(options);
 
       if (!element) {
         return {
@@ -293,7 +477,6 @@ class ActionExecutor {
 
       // Use native click for standard elements (creates trusted event that can open popups)
       // Only use synthetic events for canvas or coordinate-based clicks
-      const isCoordinateClick = options.x !== undefined && options.y !== undefined;
       const isCanvasElement = element instanceof HTMLCanvasElement;
 
       if (!isCoordinateClick && !isCanvasElement && element.click) {
@@ -363,12 +546,17 @@ class ActionExecutor {
 
   /**
    * Execute a double-click action
+   * Uses retry logic for dynamically loaded content
    * @param {object} options - { selector, xpath, x, y, highlight }
    * @returns {Promise<object>} - { success, error }
    */
   async doubleClick(options) {
     try {
-      const element = this.findElement(options);
+      // Use retry for selector/xpath based clicks (not coordinate-based)
+      const isCoordinateClick = options.x !== undefined && options.y !== undefined;
+      const element = isCoordinateClick
+        ? this.findElement(options)
+        : await this.findElementWithRetry(options);
 
       if (!element) {
         return {
@@ -400,7 +588,6 @@ class ActionExecutor {
 
       // Use native events for standard elements (creates trusted events)
       // Only use synthetic events for canvas or coordinate-based clicks
-      const isCoordinateClick = options.x !== undefined && options.y !== undefined;
       const isCanvasElement = element instanceof HTMLCanvasElement;
 
       if (!isCoordinateClick && !isCanvasElement && element.click) {
@@ -477,12 +664,17 @@ class ActionExecutor {
 
   /**
    * Execute a right-click (context menu) action
+   * Uses retry logic for dynamically loaded content
    * @param {object} options - { selector, xpath, x, y, highlight }
    * @returns {Promise<object>} - { success, error }
    */
   async rightClick(options) {
     try {
-      const element = this.findElement(options);
+      // Use retry for selector/xpath based clicks (not coordinate-based)
+      const isCoordinateClick = options.x !== undefined && options.y !== undefined;
+      const element = isCoordinateClick
+        ? this.findElement(options)
+        : await this.findElementWithRetry(options);
 
       if (!element) {
         return {
@@ -683,12 +875,14 @@ class ActionExecutor {
 
   /**
    * Execute a type action
+   * Uses retry logic for dynamically loaded content
    * @param {object} options - { selector, xpath, text, clear }
    * @returns {Promise<object>} - { success, error }
    */
   async type(options) {
     try {
-      const element = this.findElement(options);
+      // Use retry for dynamic content
+      const element = await this.findElementWithRetry(options);
 
       if (!element) {
         return {
@@ -787,12 +981,14 @@ class ActionExecutor {
 
   /**
    * Execute a read action
+   * Uses retry logic for dynamically loaded content
    * @param {object} options - { selector, xpath, property }
    * @returns {Promise<object>} - { success, value, error }
    */
   async read(options) {
     try {
-      const element = this.findElement(options);
+      // Use retry for dynamic content
+      const element = await this.findElementWithRetry(options);
 
       if (!element) {
         return {
