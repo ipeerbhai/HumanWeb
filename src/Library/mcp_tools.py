@@ -530,6 +530,20 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     }
                 }
             }
+        },
+        {
+            "name": "cobrowser_delay",
+            "description": "Wait for a specified amount of time. Use this between actions when you need to wait for animations, page loads, or modal dialogs to appear.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seconds": {
+                        "type": "number",
+                        "description": "Time to wait in seconds (e.g., 0.5 for half a second, 2.0 for two seconds). Maximum 30 seconds."
+                    }
+                },
+                "required": ["seconds"]
+            }
         }
     ]
 
@@ -607,6 +621,28 @@ async def handle_tools_call(
 
     if not name:
         raise ValueError("Missing tool name")
+
+    # Handle delay tool specially (server-side, no browser extension needed)
+    if name == "cobrowser_delay":
+        seconds = arguments.get("seconds", 0)
+        # Validate and cap at 30 seconds
+        if not isinstance(seconds, (int, float)):
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps({"success": False, "error": "seconds must be a number"})
+                }],
+                "isError": True
+            }
+        seconds = min(max(0, float(seconds)), 30.0)  # Clamp between 0 and 30
+        await asyncio.sleep(seconds)
+        return {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({"success": True, "delayed": seconds})
+            }],
+            "isError": False
+        }
 
     # Map tool names to command types
     tool_to_command = {

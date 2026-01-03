@@ -637,7 +637,7 @@ func call_tool(tool_name: String, arguments: Dictionary = {}) -> Dictionary:
 ## Health Check
 
 ```bash
-# Check MCP server
+# Check MCP server (health endpoint is at root)
 curl http://localhost:8678/
 # {"status":"ok","service":"cobrowser-mcp","version":"0.2.0"}
 
