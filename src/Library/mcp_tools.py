@@ -1,6 +1,20 @@
 """
 MCP HTTP Server for Co-Browser
 
+DEPRECATED: This file is no longer required. The MCP protocol support has been
+consolidated into cobrowser_service.py on port 8677. This file is kept for
+backward compatibility but should not be used for new deployments.
+
+Use instead:
+    python -m uvicorn src.Library.cobrowser_service:app --host 0.0.0.0 --port 8677
+
+The consolidated service provides both WebSocket communication with the Firefox
+extension AND the MCP JSON-RPC protocol on a single port.
+
+---
+
+(Original documentation below, kept for reference)
+
 Fully compliant Model Context Protocol (MCP) Streamable HTTP transport server
 for browser automation with human-in-the-loop support.
 
