@@ -213,13 +213,17 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
     return [
         {
             "name": "cobrowser_navigate",
-            "description": "Navigate the browser to a URL. Use this to open web pages.",
+            "description": "Navigate the browser to a URL. Use this to open web pages. Optional delay (in seconds) waits after page load for JavaScript to hydrate dynamic content.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
                         "description": "The URL to navigate to"
+                    },
+                    "delay": {
+                        "type": "number",
+                        "description": "Seconds to wait after page load for JS hydration (e.g. 2). Default: 0"
                     }
                 },
                 "required": ["url"]
@@ -660,7 +664,7 @@ async def handle_tools_call(
 
     # Map tool names to command types
     tool_to_command = {
-        "cobrowser_navigate": ("command.navigate", lambda a: {"url": a.get("url")}),
+        "cobrowser_navigate": ("command.navigate", lambda a: {"url": a.get("url")}),  # delay handled post-command below
         "cobrowser_click": ("command.click", lambda a: {k: v for k, v in a.items() if v is not None}),
         "cobrowser_doubleclick": ("command.doubleclick", lambda a: {k: v for k, v in a.items() if v is not None}),
         "cobrowser_rightclick": ("command.rightclick", lambda a: {k: v for k, v in a.items() if v is not None}),
@@ -741,6 +745,13 @@ async def handle_tools_call(
             )
 
             result = cmd_resp.json()
+
+            # Post-navigation delay for JS hydration
+            if name == "cobrowser_navigate":
+                delay = arguments.get("delay", 0)
+                if delay and delay > 0:
+                    delay = min(float(delay), 30.0)
+                    await asyncio.sleep(delay)
 
             return {
                 "content": [{

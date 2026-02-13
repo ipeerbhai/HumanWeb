@@ -83,13 +83,17 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="cobrowser_navigate",
-            description="Navigate the browser to a URL. Use this to open web pages.",
+            description="Navigate the browser to a URL. Use this to open web pages. Optional delay (in seconds) waits after page load for JavaScript to hydrate dynamic content.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
                         "description": "The URL to navigate to"
+                    },
+                    "delay": {
+                        "type": "number",
+                        "description": "Seconds to wait after page load for JS hydration (e.g. 2). Default: 0"
                     }
                 },
                 "required": ["url"]
@@ -452,7 +456,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if not url:
             return [TextContent(type="text", text="Error: URL is required")]
 
+        delay = arguments.get("delay", 0)
         result = await send_command("command.navigate", {"url": url})
+        if delay and delay > 0:
+            delay = min(float(delay), 30.0)
+            await asyncio.sleep(delay)
         return format_result(result, f"Navigated to {url}")
 
     elif name == "cobrowser_click":

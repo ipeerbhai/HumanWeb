@@ -409,7 +409,49 @@ function handleKeyboardCommand(command) {
 }
 
 /**
- * Handle navigate command - navigates the active tab to a URL
+ * Wait for a tab to finish loading after navigation.
+ * Resolves when tabs.onUpdated fires with status === 'complete' for the given tab.
+ */
+function waitForTabLoad(tabId, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      browser.tabs.onUpdated.removeListener(listener);
+      reject(new Error('Navigation timed out after ' + timeoutMs + 'ms'));
+    }, timeoutMs);
+
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        clearTimeout(timeout);
+        browser.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+
+    browser.tabs.onUpdated.addListener(listener);
+  });
+}
+
+/**
+ * Wait for the content script to be ready by pinging it.
+ * The content script handles 'command.navigate' with a simple {success: true} ack.
+ */
+async function waitForContentScript(tabId, maxRetries = 15, delayMs = 200) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await browser.tabs.sendMessage(tabId, { type: 'command.navigate' });
+      return; // Content script responded — it's ready
+    } catch (e) {
+      if (attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+  }
+  throw new Error('Content script not ready after navigation');
+}
+
+/**
+ * Handle navigate command - navigates the active tab to a URL.
+ * Waits for page load AND content script readiness before returning success.
  */
 async function handleNavigateCommand(message) {
   const url = message.payload?.url;
@@ -422,22 +464,45 @@ async function handleNavigateCommand(message) {
 
   try {
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tabs.length > 0) {
-      await browser.tabs.update(tabs[0].id, { url });
-
-      // Send success response back to service
+    if (tabs.length === 0) {
       wsManager.send({
         type: 'command.navigate.result',
         session_id: currentSessionId,
         correlation_id: message.id,
-        payload: { success: true, url }
+        payload: { success: false, error: 'No active tab' }
       });
-
-      return { success: true };
+      return { success: false, error: 'No active tab' };
     }
-    return { success: false, error: 'No active tab' };
+
+    const tabId = tabs[0].id;
+
+    // Start navigation and wait for page load completion
+    const loadPromise = waitForTabLoad(tabId);
+    await browser.tabs.update(tabId, { url });
+    await loadPromise;
+
+    // Wait for content script to initialize and respond to messages
+    await waitForContentScript(tabId);
+
+    console.log('[Co-Browser] Navigation complete, content script ready:', url);
+
+    // Send success response back to service
+    wsManager.send({
+      type: 'command.navigate.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: true, url }
+    });
+
+    return { success: true };
   } catch (error) {
     console.error('[Co-Browser] Navigation failed:', error);
+    wsManager.send({
+      type: 'command.navigate.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
     return { success: false, error: error.message };
   }
 }
@@ -635,17 +700,31 @@ async function forwardCommandToActiveTab(message) {
   };
 
   if (tabs.length > 0) {
-    try {
-      const response = await browser.tabs.sendMessage(tabs[0].id, {
-        type: message.type,
-        payload: message.payload,
-        correlationId: message.id
-      });
-      return response;
-    } catch (error) {
-      console.error('[Co-Browser] Failed to forward command:', error);
-      sendErrorResult(error.message || 'Content script not available');
-      return { success: false, error: error.message };
+    // Retry loop: after a click causes cross-domain navigation, the content
+    // script on the new domain needs time to initialize. Retry on connection
+    // errors to handle this race condition (mirrors waitForContentScript logic).
+    const maxRetries = 10;
+    const retryDelayMs = 300;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await browser.tabs.sendMessage(tabs[0].id, {
+          type: message.type,
+          payload: message.payload,
+          correlationId: message.id
+        });
+        return response;
+      } catch (error) {
+        const isConnectionError = error.message?.includes('Could not establish connection');
+        if (isConnectionError && attempt < maxRetries - 1) {
+          console.log(`[Co-Browser] Retry ${attempt + 1}/${maxRetries} for ${message.type}: content script not ready, waiting ${retryDelayMs}ms...`);
+          await new Promise(r => setTimeout(r, retryDelayMs));
+        } else {
+          console.error('[Co-Browser] Failed to forward command:', error);
+          sendErrorResult(error.message || 'Content script not available');
+          return { success: false, error: error.message };
+        }
+      }
     }
   }
 

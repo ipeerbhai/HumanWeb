@@ -488,13 +488,17 @@ def get_mcp_tool_definitions() -> List[Dict[str, Any]]:
     return [
         {
             "name": "cobrowser_navigate",
-            "description": "Navigate the browser to a URL. Use this to open web pages.",
+            "description": "Navigate the browser to a URL. Use this to open web pages. Optional delay (in seconds) waits after page load for JavaScript to hydrate dynamic content.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
                         "description": "The URL to navigate to"
+                    },
+                    "delay": {
+                        "type": "number",
+                        "description": "Seconds to wait after page load for JS hydration (e.g. 2). Default: 0"
                     }
                 },
                 "required": ["url"]
@@ -1574,6 +1578,13 @@ async def handle_mcp_tools_call(
         result = await service.send_command_and_wait(
             cobrowser_session_id, command_type, payload, timeout=30.0
         )
+
+        # Post-navigation delay for JS hydration (e.g. Yahoo Finance real-time prices)
+        if name == "cobrowser_navigate":
+            delay = arguments.get("delay", 0)
+            if delay and delay > 0:
+                delay = min(float(delay), 30.0)
+                await asyncio.sleep(delay)
 
         return {
             "content": [{
