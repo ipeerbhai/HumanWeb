@@ -448,6 +448,9 @@ class ActionExecutor {
         : await this.findElementWithRetry(options);
 
       if (!element) {
+        if (options.selector) {
+          return this.buildNotFoundResponse(options.selector, 'click');
+        }
         return {
           success: false,
           error: `Element not found: ${this.describeTarget(options)}`
@@ -559,6 +562,9 @@ class ActionExecutor {
         : await this.findElementWithRetry(options);
 
       if (!element) {
+        if (options.selector) {
+          return this.buildNotFoundResponse(options.selector, 'doubleclick');
+        }
         return {
           success: false,
           error: `Element not found: ${this.describeTarget(options)}`
@@ -677,6 +683,9 @@ class ActionExecutor {
         : await this.findElementWithRetry(options);
 
       if (!element) {
+        if (options.selector) {
+          return this.buildNotFoundResponse(options.selector, 'rightclick');
+        }
         return {
           success: false,
           error: `Element not found: ${this.describeTarget(options)}`
@@ -885,6 +894,9 @@ class ActionExecutor {
       const element = await this.findElementWithRetry(options);
 
       if (!element) {
+        if (options.selector) {
+          return this.buildNotFoundResponse(options.selector, 'type');
+        }
         return {
           success: false,
           error: `Element not found: ${this.describeTarget(options)}`
@@ -991,6 +1003,9 @@ class ActionExecutor {
       const element = await this.findElementWithRetry(options);
 
       if (!element) {
+        if (options.selector) {
+          return this.buildNotFoundResponse(options.selector, 'read');
+        }
         return {
           success: false,
           error: `Element not found: ${this.describeTarget(options)}`
@@ -1088,7 +1103,8 @@ class ActionExecutor {
   }
 
   /**
-   * Generate a unique CSS selector for an element
+   * Generate a stable CSS selector for an element
+   * Preference: #id > tag.class > tag[attr=val] > tag:nth-of-type
    * @param {Element} el
    * @returns {string}
    */
@@ -1097,7 +1113,36 @@ class ActionExecutor {
       return `#${el.id}`;
     }
 
-    // Try nth-of-type
+    const tag = el.tagName.toLowerCase();
+
+    // Build tag.class selector from meaningful classes (skip framework noise)
+    if (el.className && typeof el.className === 'string') {
+      const classes = el.className.trim().split(/\s+/).filter(c => c.length > 0 && c.length < 40);
+      if (classes.length > 0 && classes.length <= 3) {
+        const classSelector = `${tag}.${classes.join('.')}`;
+        // Only use if it's reasonably unique on the page
+        try {
+          if (document.querySelectorAll(classSelector).length <= 3) {
+            return classSelector;
+          }
+        } catch (e) { /* ignore invalid selectors */ }
+      }
+    }
+
+    // Try a distinguishing attribute
+    for (const attr of ['name', 'type', 'aria-label', 'placeholder', 'role', 'href']) {
+      const val = el.getAttribute(attr);
+      if (val && val.length < 60) {
+        const attrSelector = `${tag}[${attr}="${val.replace(/"/g, '\\"')}"]`;
+        try {
+          if (document.querySelectorAll(attrSelector).length <= 3) {
+            return attrSelector;
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
+
+    // Fall back to nth-of-type within parent
     const parent = el.parentElement;
     if (parent) {
       const siblings = Array.from(parent.children).filter(
@@ -1105,10 +1150,184 @@ class ActionExecutor {
       );
       const index = siblings.indexOf(el) + 1;
       const parentSelector = parent.id ? `#${parent.id}` : parent.tagName.toLowerCase();
-      return `${parentSelector} > ${el.tagName.toLowerCase()}:nth-of-type(${index})`;
+      return `${parentSelector} > ${tag}:nth-of-type(${index})`;
     }
 
-    return el.tagName.toLowerCase();
+    return tag;
+  }
+
+  /**
+   * Check if an element is visible (has layout geometry and is not hidden)
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  isElementVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    const style = window.getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+  }
+
+  /**
+   * Find fuzzy element suggestions when a selector fails.
+   * Searches by tag, text content, class overlap, and ID similarity.
+   *
+   * @param {string} selector - The failed CSS selector
+   * @returns {Array<{selector: string, text: string, tag: string}>} Up to 3 candidates
+   */
+  findSuggestions(selector) {
+    const suggestions = [];
+    const seen = new Set();
+
+    const addSuggestion = (el) => {
+      const sel = this.generateSelector(el);
+      if (seen.has(sel)) return;
+      seen.add(sel);
+      const rawText = (el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim();
+      const text = rawText.length > 60 ? rawText.substring(0, 57) + '...' : rawText;
+      suggestions.push({ selector: sel, text, tag: el.tagName.toLowerCase() });
+    };
+
+    try {
+      // --- Strategy 1: Tag-based fallback ---
+      // Extract tag name from selector (e.g. "button#submit" → "button")
+      const tagMatch = selector.match(/^([a-zA-Z][a-zA-Z0-9]*)/);
+      if (tagMatch) {
+        const tag = tagMatch[1].toLowerCase();
+        const byTag = Array.from(document.querySelectorAll(tag))
+          .filter(el => this.isElementVisible(el))
+          .slice(0, 5);
+        byTag.forEach(el => addSuggestion(el));
+      }
+
+      // --- Strategy 2: ID similarity ---
+      // Extract ID from selector (e.g. "#submit-btn" or "button#foo")
+      const idMatch = selector.match(/#([a-zA-Z0-9_-]+)/);
+      if (idMatch) {
+        const targetId = idMatch[1].toLowerCase();
+        // Find elements whose ID contains the target or vice versa
+        const allWithId = Array.from(document.querySelectorAll('[id]'))
+          .filter(el => {
+            const elId = el.id.toLowerCase();
+            return this.isElementVisible(el) && (
+              elId.includes(targetId) || targetId.includes(elId) ||
+              this.stringSimilarity(elId, targetId) > 0.5
+            );
+          })
+          .slice(0, 5);
+        allWithId.forEach(el => addSuggestion(el));
+      }
+
+      // --- Strategy 3: Class overlap ---
+      // Extract class names from selector (e.g. ".btn.primary" or "button.submit")
+      const classMatches = selector.match(/\.([a-zA-Z][a-zA-Z0-9_-]*)/g);
+      if (classMatches) {
+        const targetClasses = classMatches.map(c => c.slice(1).toLowerCase());
+        // Find elements sharing at least one class
+        for (const cls of targetClasses) {
+          const byClass = Array.from(document.querySelectorAll(`.${cls}`))
+            .filter(el => this.isElementVisible(el))
+            .slice(0, 3);
+          byClass.forEach(el => addSuggestion(el));
+          if (suggestions.length >= 6) break;
+        }
+      }
+
+      // --- Strategy 4: Text-based search ---
+      // Extract quoted text from selectors like [text()='Submit'] or aria-label="foo"
+      const textMatch = selector.match(/['""]([^'""\]]+)['""\]]/);
+      if (textMatch && textMatch[1].length >= 2) {
+        const targetText = textMatch[1].toLowerCase();
+        const interactive = Array.from(document.querySelectorAll(
+          'button, a, input, [role="button"], [role="link"], [role="menuitem"]'
+        )).filter(el => {
+          if (!this.isElementVisible(el)) return false;
+          const elText = (el.textContent || el.value || '').trim().toLowerCase();
+          return elText.includes(targetText) || targetText.includes(elText);
+        }).slice(0, 3);
+        interactive.forEach(el => addSuggestion(el));
+      }
+    } catch (e) {
+      // Best-effort — don't let suggestion failures propagate
+    }
+
+    // Score: prefer elements with non-empty text content and shorter selectors
+    return suggestions
+      .slice(0, 8)
+      .sort((a, b) => {
+        const aScore = (a.text ? 2 : 0) + (a.selector.startsWith('#') ? 3 : 0) - a.selector.length * 0.01;
+        const bScore = (b.text ? 2 : 0) + (b.selector.startsWith('#') ? 3 : 0) - b.selector.length * 0.01;
+        return bScore - aScore;
+      })
+      .slice(0, 3);
+  }
+
+  /**
+   * Simple string similarity (Dice coefficient on bigrams)
+   * @param {string} a
+   * @param {string} b
+   * @returns {number} 0..1
+   */
+  stringSimilarity(a, b) {
+    if (a === b) return 1;
+    if (a.length < 2 || b.length < 2) return 0;
+    const getBigrams = s => {
+      const bigrams = new Set();
+      for (let i = 0; i < s.length - 1; i++) bigrams.add(s.slice(i, i + 2));
+      return bigrams;
+    };
+    const setA = getBigrams(a);
+    const setB = getBigrams(b);
+    let intersection = 0;
+    for (const bg of setA) { if (setB.has(bg)) intersection++; }
+    return (2 * intersection) / (setA.size + setB.size);
+  }
+
+  /**
+   * Build a structured failure response with fuzzy suggestions.
+   * Used by action methods when an element cannot be found.
+   *
+   * @param {string} selector - The failed selector
+   * @param {string} [actionLabel] - e.g. "click", "type"
+   * @returns {object} {success: false, error, match_count, suggestions, hint}
+   */
+  buildNotFoundResponse(selector, actionLabel) {
+    const suggestions = this.findSuggestions(selector);
+    const hint = suggestions.length > 0
+      ? `${suggestions.length} similar element${suggestions.length > 1 ? 's' : ''} found. Try one of the suggested selectors.`
+      : 'No similar elements found. Check the selector or use cobrowser_get_page_info to inspect the page.';
+    return {
+      success: false,
+      error: `Selector '${selector}' not found`,
+      match_count: 0,
+      suggestions,
+      hint
+    };
+  }
+
+  /**
+   * Build a structured response for ambiguous (multi-match) selectors.
+   * Returns suggestions using the first few matches with more specific selectors.
+   *
+   * @param {string} selector - The ambiguous selector
+   * @param {NodeList|Array} matches - All matched elements
+   * @returns {object} {success: false, error, match_count, suggestions, hint}
+   */
+  buildAmbiguousResponse(selector, matches) {
+    const suggestions = Array.from(matches).slice(0, 3).map((el, idx) => {
+      const sel = this.generateSelector(el);
+      const rawText = (el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
+      const text = rawText.length > 60 ? rawText.substring(0, 57) + '...' : rawText;
+      return { selector: sel, text, tag: el.tagName.toLowerCase(), index: idx };
+    });
+    return {
+      success: false,
+      error: `Selector '${selector}' matched ${matches.length} elements — ambiguous`,
+      match_count: matches.length,
+      suggestions,
+      hint: 'Multiple matches. Use a more specific selector or add distinguishing text.'
+    };
   }
 
   /**

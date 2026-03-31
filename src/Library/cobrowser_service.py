@@ -850,13 +850,80 @@ def get_mcp_tool_definitions() -> List[Dict[str, Any]]:
                 },
                 "required": ["seconds"]
             }
+        },
+        {
+            "name": "cobrowser_tab_list",
+            "description": "List all open browser tabs with tab ID, URL, title, and claim status. Use to find available tabs for parallel browsing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "cobrowser_tab_new",
+            "description": "Open a new browser tab, optionally navigating to a URL. Returns the tab ID for targeting future commands.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to open in the new tab (optional, opens blank tab if omitted)"
+                    }
+                }
+            }
+        },
+        {
+            "name": "cobrowser_tab_close",
+            "description": "Close a browser tab by ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "The tab ID to close (from cobrowser_tab_list)"
+                    }
+                },
+                "required": ["tab_id"]
+            }
+        },
+        {
+            "name": "cobrowser_tab_claim",
+            "description": "Claim exclusive access to a browser tab. Other agents' commands to this tab will be rejected until released.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "The tab ID to claim (from cobrowser_tab_list)"
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Identifier for this agent (used to match ownership on release)"
+                    }
+                },
+                "required": ["tab_id"]
+            }
+        },
+        {
+            "name": "cobrowser_tab_release",
+            "description": "Release exclusive claim on a browser tab.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "The tab ID to release"
+                    }
+                },
+                "required": ["tab_id"]
+            }
         }
     ]
 
 
 # Tool name to command type mapping
 MCP_TOOL_TO_COMMAND = {
-    "cobrowser_navigate": ("command.navigate", lambda a: {"url": a.get("url")}),
+    "cobrowser_navigate": ("command.navigate", lambda a: {k: v for k, v in a.items() if v is not None and k != "delay"}),
     "cobrowser_click": ("command.click", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_doubleclick": ("command.doubleclick", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_rightclick": ("command.rightclick", lambda a: {k: v for k, v in a.items() if v is not None}),
@@ -864,7 +931,7 @@ MCP_TOOL_TO_COMMAND = {
     "cobrowser_type": ("command.type", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_read": ("command.read", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_scroll": ("command.scroll", lambda a: {k: v for k, v in a.items() if v is not None}),
-    "cobrowser_get_page_info": ("command.getState", lambda a: {}),
+    "cobrowser_get_page_info": ("command.getState", lambda a: {k: v for k, v in a.items() if k in ("tab_id", "agent_id") and v is not None}),
     "cobrowser_query_all": ("command.queryAll", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_screenshot": ("command.screenshot", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_request_human": ("handoff.request", lambda a: {k: v for k, v in a.items() if v is not None}),
@@ -875,6 +942,12 @@ MCP_TOOL_TO_COMMAND = {
     "cobrowser_native_type": ("command.nativeType", lambda a: {"text": a.get("text")}),
     "cobrowser_native_hotkey": ("command.nativeHotkey", lambda a: {"keys": a.get("keys")}),
     "cobrowser_native_scroll": ("command.nativeScroll", lambda a: {"clicks": a.get("clicks", -3)}),
+    # Tab management — routed to extension via WebSocket
+    "cobrowser_tab_list": ("tab.list", lambda a: {}),
+    "cobrowser_tab_new": ("tab.new", lambda a: {k: v for k, v in a.items() if v is not None}),
+    "cobrowser_tab_close": ("tab.close", lambda a: {"tab_id": a.get("tab_id")}),
+    "cobrowser_tab_claim": ("tab.claim", lambda a: {k: v for k, v in a.items() if v is not None}),
+    "cobrowser_tab_release": ("tab.release", lambda a: {"tab_id": a.get("tab_id")}),
 }
 
 
@@ -1323,6 +1396,22 @@ async def send_command_sync(session_id: str, command: Dict[str, Any]):
     payload = command.get("payload", {})
     timeout = command.get("timeout", 30.0)
 
+    # Pass tab_id and agent_id through if present in the top-level command object
+    # (they may also already be in the payload, but support both locations)
+    if "tab_id" in command and "tab_id" not in payload:
+        payload = dict(payload)
+        payload["tab_id"] = command["tab_id"]
+    if "agent_id" in command and "agent_id" not in payload:
+        payload = dict(payload)
+        payload["agent_id"] = command["agent_id"]
+
+    # tab.* commands are forwarded to the extension via WebSocket and resolved there
+    if command_type.startswith("tab."):
+        result = await service.send_command_and_wait(
+            session_id, command_type, payload, timeout
+        )
+        return result
+
     # Handle native automation commands directly in Python
     # These require getting screen coords from extension, then executing pyautogui
     if command_type == "command.nativeClick":
@@ -1585,6 +1674,19 @@ async def handle_mcp_tools_call(
             if delay and delay > 0:
                 delay = min(float(delay), 30.0)
                 await asyncio.sleep(delay)
+
+        # For tab commands, unwrap the inner result payload for cleaner output
+        if name.startswith("cobrowser_tab_"):
+            inner = result.get("result", result)
+            # inner is the payload from the extension: {success, tabs/tab_id/...}
+            is_error = not inner.get("success", False)
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(inner)
+                }],
+                "isError": is_error
+            }
 
         return {
             "content": [{

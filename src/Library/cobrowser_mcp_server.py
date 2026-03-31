@@ -45,11 +45,31 @@ async def get_active_session() -> str | None:
     return None
 
 
-async def send_command(command_type: str, payload: dict, wait_for_result: bool = True) -> dict:
-    """Send a command to the cobrowser service."""
+async def send_command(
+    command_type: str,
+    payload: dict,
+    wait_for_result: bool = True,
+    tab_id: int | None = None,
+    agent_id: str | None = None,
+) -> dict:
+    """Send a command to the cobrowser service.
+
+    tab_id: if provided, routes the command to that specific browser tab.
+            The extension's claim semantics apply — if the tab is claimed by a
+            different agent, the command will be rejected by the background script.
+    agent_id: identifier for this agent, used for claim ownership checks.
+    """
     session_id = await get_active_session()
     if not session_id:
         return {"success": False, "error": "No active browser session. Make sure the extension is connected."}
+
+    # Include tab_id and agent_id in the payload so the extension can route correctly
+    if tab_id is not None:
+        payload = dict(payload)
+        payload["tab_id"] = tab_id
+    if agent_id is not None:
+        payload = dict(payload)
+        payload["agent_id"] = agent_id
 
     async with httpx.AsyncClient() as client:
         try:
@@ -94,6 +114,14 @@ async def list_tools() -> list[Tool]:
                     "delay": {
                         "type": "number",
                         "description": "Seconds to wait after page load for JS hydration (e.g. 2). Default: 0"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID (from cobrowser_tab_list). Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": ["url"]
@@ -124,6 +152,14 @@ async def list_tools() -> list[Tool]:
                     "y": {
                         "type": "number",
                         "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID (from cobrowser_tab_list). Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": []
@@ -150,6 +186,14 @@ async def list_tools() -> list[Tool]:
                     "y": {
                         "type": "number",
                         "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID. Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": []
@@ -176,6 +220,14 @@ async def list_tools() -> list[Tool]:
                     "y": {
                         "type": "number",
                         "description": "Y coordinate (viewport) - use with x for canvas elements"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID. Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": []
@@ -232,6 +284,14 @@ async def list_tools() -> list[Tool]:
                     "clear": {
                         "type": "boolean",
                         "description": "Clear the field before typing (default: false)"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID. Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": ["text"]
@@ -254,6 +314,14 @@ async def list_tools() -> list[Tool]:
                     "index": {
                         "type": "number",
                         "description": "0-based index of which matching element to read (default: 0, first match)"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID. Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": []
@@ -272,6 +340,14 @@ async def list_tools() -> list[Tool]:
                     "limit": {
                         "type": "number",
                         "description": "Maximum number of elements to return (default: 20, max: 50)"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID. Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": ["selector"]
@@ -291,17 +367,94 @@ async def list_tools() -> list[Tool]:
                     "amount": {
                         "type": "number",
                         "description": "Pixels to scroll (default: 300)"
+                    },
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID. Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
                     }
                 },
                 "required": ["direction"]
             }
         ),
         Tool(
-            name="cobrowser_get_page_info",
-            description="Get information about the current page including URL and title.",
+            name="cobrowser_page_identity",
+            description="Get basic page identity: URL, title, description, page type (search_results/article/form/login/product/listing), language, security flags. Cheapest orientation tool — use first after navigation to understand what kind of page you're on. Returns ~50 tokens.",
             inputSchema={
                 "type": "object",
                 "properties": {}
+            }
+        ),
+        Tool(
+            name="cobrowser_page_structure",
+            description="Get page structure overview: headings, landmarks (nav/main/aside/header/footer with sizes), buttons, links, forms, inputs, actionable elements, repeated content patterns (cards/rows/list items), scroll depth. Returns compact overview with CSS selectors for each element. Use after navigation to understand page layout and find what to interact with. Returns 200-800 tokens.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="cobrowser_page_section",
+            description="Read a specific section of a webpage by CSS selector. Returns scoped text content, interactive elements (buttons, inputs, forms), and links within that region. Optionally extract structured data from repeating child elements using a declarative field map (e.g. {\"title\": \"h3\", \"url\": \"a@href\", \"price\": \".cost\"}). Use after cobrowser_page_structure to zoom into a region of interest.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector targeting a page region (e.g. 'main', '#results', 'nav.sidebar')"
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters of text content to return (default 3000)"
+                    },
+                    "fields": {
+                        "type": "object",
+                        "description": "Declarative field map for structured extraction from repeating child elements. Keys are field names, values are CSS selectors (optionally with @attribute suffix). Example: {\"title\": \"h3\", \"url\": \"a@href\", \"price\": \".cost\"}"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max items when using fields extraction (default 25)"
+                    }
+                },
+                "required": ["selector"]
+            }
+        ),
+        Tool(
+            name="cobrowser_page_html",
+            description="Get raw HTML of a page section by CSS selector. Last resort — prefer cobrowser_page_section for structured content. Use only when you need exact markup (e.g. to understand a custom widget or complex layout).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector targeting a page region"
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters of HTML to return (default 5000)"
+                    }
+                },
+                "required": ["selector"]
+            }
+        ),
+        Tool(
+            name="cobrowser_get_page_info",
+            description="[DEPRECATED — use cobrowser_page_identity + cobrowser_page_structure instead] Get basic page URL and title.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "Target a specific browser tab by ID. Omit to use the active tab."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for tab claim ownership checks."
+                    }
+                }
             }
         ),
         Tool(
@@ -430,20 +583,130 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": []
             }
+        ),
+        Tool(
+            name="cobrowser_tab_list",
+            description="List all open browser tabs with tab ID, URL, title, and claim status. Use to find available tabs for parallel browsing.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="cobrowser_tab_new",
+            description="Open a new browser tab, optionally navigating to a URL. Returns the tab ID for targeting future commands.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to open in the new tab (optional, opens blank tab if omitted)"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="cobrowser_tab_close",
+            description="Close a browser tab by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "The tab ID to close (from cobrowser_tab_list)"
+                    }
+                },
+                "required": ["tab_id"]
+            }
+        ),
+        Tool(
+            name="cobrowser_tab_claim",
+            description="Claim exclusive access to a browser tab. Other agents' commands to this tab will be rejected until released.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "The tab ID to claim (from cobrowser_tab_list)"
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Identifier for this agent (used to match ownership on release)"
+                    }
+                },
+                "required": ["tab_id"]
+            }
+        ),
+        Tool(
+            name="cobrowser_tab_release",
+            description="Release exclusive claim on a browser tab.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "integer",
+                        "description": "The tab ID to release"
+                    }
+                },
+                "required": ["tab_id"]
+            }
         )
     ]
 
 
+def _format_action_error(data: dict) -> str:
+    """Format a structured action error (from the browser extension) as readable text.
+
+    If the error includes fuzzy suggestions, formats them as a numbered list.
+    """
+    error = data.get("error", "Unknown error")
+    suggestions = data.get("suggestions", [])
+    hint = data.get("hint", "")
+
+    lines = [f"Error: {error}"]
+
+    if suggestions:
+        lines.append("")
+        lines.append("Similar elements found:")
+        for i, s in enumerate(suggestions, 1):
+            label = s.get("text", "").strip()
+            sel = s.get("selector", "")
+            line = f"  [{i}] {sel}"
+            if label:
+                line += f' — "{label}"'
+            lines.append(line)
+        lines.append("")
+        lines.append("Try one of these selectors instead.")
+    elif hint:
+        lines.append("")
+        lines.append(hint)
+
+    return "\n".join(lines)
+
+
 def format_result(result: dict, success_msg: str) -> list[TextContent]:
-    """Format a command result into a text response."""
+    """Format a command result into a text response.
+
+    Handles two levels of success:
+    - Outer: did the service successfully deliver the command? (result["success"])
+    - Inner: did the browser action itself succeed? (result["result"]["success"])
+
+    When the action fails with suggestions, formats them as readable text.
+    """
     if result.get("success"):
-        # Include actual result data if present
         data = result.get("result", {})
-        if data:
-            import json
+
+        # Check if the action itself failed (inner failure from the extension)
+        if isinstance(data, dict) and not data.get("success", True):
+            return [TextContent(type="text", text=_format_action_error(data))]
+
+        # Action succeeded — include result data if it has meaningful content beyond {success: true}
+        if data and set(data.keys()) - {"success", "message_type"}:
             return [TextContent(type="text", text=f"{success_msg}\n\nResult: {json.dumps(data, indent=2)}")]
         return [TextContent(type="text", text=success_msg)]
     else:
+        # Service-level failure (no connection, timeout, etc.)
         return [TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
 
 
@@ -451,13 +714,17 @@ def format_result(result: dict, success_msg: str) -> list[TextContent]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Execute a browser automation tool."""
 
+    # Extract optional tab routing params common to all action tools
+    _tab_id: int | None = arguments.get("tab_id")
+    _agent_id: str | None = arguments.get("agent_id")
+
     if name == "cobrowser_navigate":
         url = arguments.get("url")
         if not url:
             return [TextContent(type="text", text="Error: URL is required")]
 
         delay = arguments.get("delay", 0)
-        result = await send_command("command.navigate", {"url": url})
+        result = await send_command("command.navigate", {"url": url}, tab_id=_tab_id, agent_id=_agent_id)
         if delay and delay > 0:
             delay = min(float(delay), 30.0)
             await asyncio.sleep(delay)
@@ -484,7 +751,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload["x"] = x
             payload["y"] = y
 
-        result = await send_command("command.click", payload)
+        result = await send_command("command.click", payload, tab_id=_tab_id, agent_id=_agent_id)
         target = selector or xpath or f"({x}, {y})"
         if index is not None:
             target += f"[{index}]"
@@ -508,7 +775,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload["x"] = x
             payload["y"] = y
 
-        result = await send_command("command.doubleclick", payload)
+        result = await send_command("command.doubleclick", payload, tab_id=_tab_id, agent_id=_agent_id)
         target = selector or xpath or f"({x}, {y})"
         return format_result(result, f"Double-clicked element: {target}")
 
@@ -530,7 +797,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload["x"] = x
             payload["y"] = y
 
-        result = await send_command("command.rightclick", payload)
+        result = await send_command("command.rightclick", payload, tab_id=_tab_id, agent_id=_agent_id)
         target = selector or xpath or f"({x}, {y})"
         return format_result(result, f"Right-clicked element: {target}")
 
@@ -547,7 +814,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if arguments.get("targetY") is not None:
             payload["targetY"] = arguments["targetY"]
 
-        result = await send_command("command.drag", payload)
+        result = await send_command("command.drag", payload, tab_id=_tab_id, agent_id=_agent_id)
         target_desc = arguments.get("targetSelector") or f"({arguments.get('targetX')}, {arguments.get('targetY')})"
         return format_result(result, f"Dragged {selector} to {target_desc}")
 
@@ -571,7 +838,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if index is not None:
             payload["index"] = index
 
-        result = await send_command("command.type", payload)
+        result = await send_command("command.type", payload, tab_id=_tab_id, agent_id=_agent_id)
         target = selector or xpath
         if index is not None:
             target += f"[{index}]"
@@ -592,7 +859,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if index is not None:
             payload["index"] = index
 
-        result = await send_command("command.read", payload)
+        result = await send_command("command.read", payload, tab_id=_tab_id, agent_id=_agent_id)
         target = selector or xpath
         if index is not None:
             target += f"[{index}]"
@@ -611,7 +878,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await send_command("command.queryAll", {
             "selector": selector,
             "limit": limit
-        })
+        }, tab_id=_tab_id, agent_id=_agent_id)
 
         if result.get("success"):
             data = result.get("result", result)  # Result may be nested under "result"
@@ -653,11 +920,178 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await send_command("command.scroll", {
             "direction": direction,
             "amount": amount
-        })
+        }, tab_id=_tab_id, agent_id=_agent_id)
         return format_result(result, f"Scrolled {direction} by {amount}px")
 
+    elif name == "cobrowser_page_identity":
+        result = await send_command("command.getIdentity", {})
+        if result.get("success") and result.get("result"):
+            info = result["result"]
+            lines = []
+            lines.append(f"Page: {info.get('title', 'unknown')}")
+            lines.append(f"URL: {info.get('url', 'unknown')}")
+            if info.get('meta_description'):
+                lines.append(f"Description: {info['meta_description']}")
+            lines.append(f"Type: {info.get('page_type', 'unknown')}")
+            if info.get('lang'):
+                lines.append(f"Language: {info['lang']}")
+            security = info.get('security', {})
+            flags = []
+            if security.get('isLoginPage'):
+                flags.append('login page')
+            if security.get('hasCaptcha'):
+                flags.append(f"captcha ({security.get('captchaType', 'unknown')})")
+            if security.get('hasCloudflareChallenge'):
+                flags.append('cloudflare challenge')
+            if security.get('hasPasswordFields'):
+                flags.append('has password fields')
+            if info.get('is_sensitive'):
+                flags.append('sensitive URL (banking/payment)')
+            if flags:
+                lines.append(f"Security: {', '.join(flags)}")
+            return [TextContent(type="text", text="\n".join(lines))]
+        return format_result(result, "Got page identity")
+
+    elif name == "cobrowser_page_structure":
+        result = await send_command("command.getStructure", {})
+        if result.get("success") and result.get("result"):
+            info = result["result"]
+            lines = []
+
+            # Landmarks
+            landmarks = info.get('landmarks', [])
+            if landmarks:
+                lines.append("Landmarks:")
+                for lm in landmarks:
+                    label = lm.get('label', lm.get('tag', '?'))
+                    chars = lm.get('chars', 0)
+                    size = f"{chars:,}" if chars < 10000 else f"{chars // 1000}K"
+                    lines.append(f"  [{lm.get('tag', '?')}] {label} ({size} chars, {lm.get('children', 0)} children) → {lm.get('selector', '?')}")
+
+            # Headings
+            headings = info.get('headings', [])
+            if headings:
+                lines.append("\nHeadings:")
+                for h in headings:
+                    indent = "  " + "  " * (h.get('level', 1) - 1)
+                    lines.append(f"{indent}h{h.get('level', '?')}: {h.get('text', '')} → {h.get('selector', '?')}")
+
+            # Top actions
+            actions = info.get('actions', [])
+            if actions:
+                lines.append("\nActions:")
+                for a in actions:
+                    lines.append(f"  [{a.get('type', '?')}] \"{a.get('text', '')}\" → {a.get('selector', '?')}")
+
+            # Counts
+            counts = info.get('counts', {})
+            if counts:
+                parts = [f"{v} {k}" for k, v in counts.items() if v > 0]
+                lines.append(f"\nElement counts: {', '.join(parts)}")
+
+            # Scroll depth
+            scroll = info.get('scroll_pages', 1)
+            if scroll > 1:
+                lines.append(f"Scroll depth: {scroll} pages")
+
+            # Repeated regions
+            regions = info.get('repeated_regions', [])
+            if regions:
+                lines.append("\nRepeated patterns:")
+                for r in regions:
+                    lines.append(f"  {r.get('count', '?')}x {r.get('item_selector', r.get('selector', '?'))} — \"{r.get('sample_text', '')}\"")
+                    lines.append(f"    selector: {r.get('selector', '?')}")
+
+            return [TextContent(type="text", text="\n".join(lines))]
+        return format_result(result, "Got page structure")
+
+    elif name == "cobrowser_page_section":
+        selector = arguments.get("selector")
+        if not selector:
+            return [TextContent(type="text", text="Error: selector is required")]
+
+        payload = {"selector": selector}
+        if "max_chars" in arguments:
+            payload["maxChars"] = arguments["max_chars"]
+        if "fields" in arguments:
+            payload["fields"] = arguments["fields"]
+        if "limit" in arguments:
+            payload["limit"] = arguments["limit"]
+
+        result = await send_command("command.getSection", payload)
+        if result.get("success") and result.get("result"):
+            info = result["result"]
+
+            if not info.get("success", True):
+                return [TextContent(type="text", text=f"Error: {info.get('error', 'Unknown error')}")]
+
+            lines = [f"Section: {selector} ({info.get('tag', '?')}, {info.get('chars', 0):,} chars)"]
+
+            # Declarative extraction mode
+            if "items" in info:
+                lines.append(f"\nExtracted {info.get('item_count', 0)} items:")
+                for i, item in enumerate(info["items"]):
+                    parts = [f"{k}: {v}" for k, v in item.items() if v is not None]
+                    lines.append(f"  [{i}] {' | '.join(parts)}")
+                return [TextContent(type="text", text="\n".join(lines))]
+
+            # Standard section mode
+            if info.get("text"):
+                text = info["text"]
+                if info.get("text_truncated"):
+                    text += "\n... (truncated)"
+                lines.append(f"\nText:\n{text}")
+
+            inputs = info.get("inputs", [])
+            if inputs:
+                lines.append(f"\nInputs ({len(inputs)}):")
+                for inp in inputs:
+                    label = inp.get("text", "") or inp.get("type", "")
+                    lines.append(f"  [{inp.get('type', '?')}] {label} → {inp.get('selector', '?')}")
+
+            buttons = info.get("buttons", [])
+            if buttons:
+                lines.append(f"\nButtons ({len(buttons)}):")
+                for btn in buttons:
+                    lines.append(f"  \"{btn.get('text', '')}\" → {btn.get('selector', '?')}")
+
+            links = info.get("links", [])
+            if links:
+                lines.append(f"\nLinks ({len(links)}):")
+                for lnk in links:
+                    lines.append(f"  \"{lnk.get('text', '')}\" → {lnk.get('selector', '?')}")
+
+            return [TextContent(type="text", text="\n".join(lines))]
+        return format_result(result, f"Got section: {selector}")
+
+    elif name == "cobrowser_page_html":
+        selector = arguments.get("selector")
+        if not selector:
+            return [TextContent(type="text", text="Error: selector is required")]
+
+        max_chars = arguments.get("max_chars", 5000)
+        result = await send_command("command.getSection", {"selector": selector, "maxChars": max_chars})
+        if result.get("success") and result.get("result"):
+            info = result["result"]
+            if not info.get("success", True):
+                return [TextContent(type="text", text=f"Error: {info.get('error', 'Unknown error')}")]
+            # For HTML mode, re-fetch using getState with a targeted approach
+            # Since we don't have a dedicated HTML extraction command yet,
+            # use the cleaned DOM approach scoped to the selector
+        # Fall back to reading via the section's text for now
+        # TODO: Add a dedicated command.getHTML that returns outerHTML
+        result = await send_command("command.read", {"selector": selector, "property": "html"})
+        if result.get("success") and result.get("result"):
+            data = result["result"]
+            html = data.get("value", "")
+            if len(html) > max_chars:
+                html = html[:max_chars] + "\n<!-- truncated -->"
+            return [TextContent(type="text", text=f"HTML for {selector}:\n\n{html}")]
+        return format_result(result, f"Got HTML: {selector}")
+
     elif name == "cobrowser_get_page_info":
-        result = await send_command("command.getState", {})
+        # Deprecated — backwards compatibility
+        result = await send_command("command.getState", {}, tab_id=_tab_id, agent_id=_agent_id)
         if result.get("success") and result.get("result"):
             info = result["result"]
             metadata = info.get("metadata", {})
@@ -778,6 +1212,79 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await send_command("command.nativeScroll", {"clicks": clicks})
         direction = "up" if clicks > 0 else "down"
         return format_result(result, f"Scrolled {direction} by {abs(clicks)} clicks")
+
+    elif name == "cobrowser_tab_list":
+        result = await send_command("tab.list", {})
+        if result.get("success"):
+            inner = result.get("result", {})
+            if not inner.get("success", True):
+                return [TextContent(type="text", text=f"Error: {inner.get('error', 'Unknown error')}")]
+            tabs = inner.get("tabs", [])
+            if not tabs:
+                return [TextContent(type="text", text="No open tabs.")]
+            lines = [f"Open tabs ({len(tabs)}):"]
+            for tab in tabs:
+                claimed = f" [claimed by {tab['claimed_by']}]" if tab.get("claimed_by") else ""
+                active = " [active]" if tab.get("active") else ""
+                lines.append(f"  tab_id={tab['tab_id']}{active}{claimed} — {tab.get('title', 'untitled')}")
+                lines.append(f"    {tab.get('url', '')}")
+            return [TextContent(type="text", text="\n".join(lines))]
+        return format_result(result, "Listed tabs")
+
+    elif name == "cobrowser_tab_new":
+        url = arguments.get("url")
+        payload = {}
+        if url:
+            payload["url"] = url
+        result = await send_command("tab.new", payload)
+        if result.get("success"):
+            inner = result.get("result", {})
+            if not inner.get("success", True):
+                return [TextContent(type="text", text=f"Error: {inner.get('error', 'Unknown error')}")]
+            tab_id = inner.get("tab_id")
+            tab_url = inner.get("url", url or "about:blank")
+            return [TextContent(type="text", text=f"Opened new tab: tab_id={tab_id}, url={tab_url}")]
+        return format_result(result, "Opened new tab")
+
+    elif name == "cobrowser_tab_close":
+        tab_id = arguments.get("tab_id")
+        if tab_id is None:
+            return [TextContent(type="text", text="Error: tab_id is required")]
+        result = await send_command("tab.close", {"tab_id": tab_id})
+        if result.get("success"):
+            inner = result.get("result", {})
+            if not inner.get("success", True):
+                return [TextContent(type="text", text=f"Error: {inner.get('error', 'Unknown error')}")]
+            return [TextContent(type="text", text=f"Closed tab {tab_id}")]
+        return format_result(result, f"Closed tab {tab_id}")
+
+    elif name == "cobrowser_tab_claim":
+        tab_id = arguments.get("tab_id")
+        agent_id = arguments.get("agent_id")
+        if tab_id is None:
+            return [TextContent(type="text", text="Error: tab_id is required")]
+        payload = {"tab_id": tab_id}
+        if agent_id:
+            payload["agent_id"] = agent_id
+        result = await send_command("tab.claim", payload)
+        if result.get("success"):
+            inner = result.get("result", {})
+            if not inner.get("success", True):
+                return [TextContent(type="text", text=f"Error: {inner.get('error', 'Unknown error')}")]
+            return [TextContent(type="text", text=f"Claimed tab {tab_id} for agent '{agent_id or 'unknown'}'")]
+        return format_result(result, f"Claimed tab {tab_id}")
+
+    elif name == "cobrowser_tab_release":
+        tab_id = arguments.get("tab_id")
+        if tab_id is None:
+            return [TextContent(type="text", text="Error: tab_id is required")]
+        result = await send_command("tab.release", {"tab_id": tab_id})
+        if result.get("success"):
+            inner = result.get("result", {})
+            if not inner.get("success", True):
+                return [TextContent(type="text", text=f"Error: {inner.get('error', 'Unknown error')}")]
+            return [TextContent(type="text", text=f"Released claim on tab {tab_id}")]
+        return format_result(result, f"Released tab {tab_id}")
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]

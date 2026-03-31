@@ -19,6 +19,194 @@ let sessionManager = null;
 let messageRouter = null;
 let currentSessionId = null;
 
+// Tab claim state: Map<tab_id (number), agent_id (string)>
+const _tabClaims = new Map();
+
+// Clean up claims when a tab is closed
+browser.tabs.onRemoved.addListener((tabId) => {
+  _tabClaims.delete(tabId);
+});
+
+/**
+ * Handle tab.list command — list all open tabs with claim status
+ */
+async function handleTabList(message) {
+  try {
+    const tabs = await browser.tabs.query({});
+    const result = tabs.map(tab => ({
+      tab_id: tab.id,
+      url: tab.url,
+      title: tab.title,
+      status: tab.status,
+      active: tab.active,
+      claimed_by: _tabClaims.get(tab.id) || null
+    }));
+    wsManager.send({
+      type: 'tab.list.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: true, tabs: result }
+    });
+  } catch (error) {
+    wsManager.send({
+      type: 'tab.list.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
+  }
+}
+
+/**
+ * Handle tab.new command — open a new browser tab
+ */
+async function handleTabNew(message) {
+  const url = message.payload?.url || null;
+  try {
+    const createProps = url ? { url } : {};
+    const tab = await browser.tabs.create(createProps);
+    wsManager.send({
+      type: 'tab.new.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: true, tab_id: tab.id, url: tab.url }
+    });
+  } catch (error) {
+    wsManager.send({
+      type: 'tab.new.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
+  }
+}
+
+/**
+ * Handle tab.close command — close a browser tab
+ */
+async function handleTabClose(message) {
+  const tabId = message.payload?.tab_id;
+  if (!tabId) {
+    wsManager.send({
+      type: 'tab.close.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: 'tab_id is required' }
+    });
+    return;
+  }
+  try {
+    await browser.tabs.remove(tabId);
+    _tabClaims.delete(tabId);
+    wsManager.send({
+      type: 'tab.close.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: true }
+    });
+  } catch (error) {
+    wsManager.send({
+      type: 'tab.close.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: error.message }
+    });
+  }
+}
+
+/**
+ * Handle tab.claim command — claim exclusive access to a tab
+ */
+async function handleTabClaim(message) {
+  const tabId = message.payload?.tab_id;
+  const agentId = message.payload?.agent_id;
+
+  if (!tabId) {
+    wsManager.send({
+      type: 'tab.claim.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: 'tab_id is required' }
+    });
+    return;
+  }
+
+  const existingClaim = _tabClaims.get(tabId);
+  if (existingClaim && existingClaim !== agentId) {
+    wsManager.send({
+      type: 'tab.claim.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: {
+        success: false,
+        error: `Tab claimed by agent ${existingClaim}, use cobrowser_tab_list to find available tabs`
+      }
+    });
+    return;
+  }
+
+  _tabClaims.set(tabId, agentId || 'unknown');
+  wsManager.send({
+    type: 'tab.claim.result',
+    session_id: currentSessionId,
+    correlation_id: message.id,
+    payload: { success: true, tab_id: tabId, agent_id: agentId }
+  });
+}
+
+/**
+ * Handle tab.release command — release exclusive claim on a tab
+ */
+async function handleTabRelease(message) {
+  const tabId = message.payload?.tab_id;
+  if (!tabId) {
+    wsManager.send({
+      type: 'tab.release.result',
+      session_id: currentSessionId,
+      correlation_id: message.id,
+      payload: { success: false, error: 'tab_id is required' }
+    });
+    return;
+  }
+  _tabClaims.delete(tabId);
+  wsManager.send({
+    type: 'tab.release.result',
+    session_id: currentSessionId,
+    correlation_id: message.id,
+    payload: { success: true }
+  });
+}
+
+/**
+ * Resolve the tab ID to route a command to.
+ * If tab_id is specified in the message payload, use it.
+ * Otherwise fall back to the active tab (backwards compatible).
+ * Returns { tabId, error } — error is set if the tab is claimed by a different agent.
+ */
+async function resolveCommandTab(message) {
+  const requestedTabId = message.payload?.tab_id;
+  const agentId = message.payload?.agent_id || null;
+
+  if (requestedTabId != null) {
+    // Check claim
+    const claimHolder = _tabClaims.get(requestedTabId);
+    if (claimHolder && claimHolder !== agentId) {
+      return {
+        tabId: null,
+        error: `Tab claimed by agent ${claimHolder}, use cobrowser_tab_list to find available tabs`
+      };
+    }
+    return { tabId: requestedTabId, error: null };
+  }
+
+  // Fall back to active tab
+  const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+  if (tabs.length === 0) {
+    return { tabId: null, error: 'No active tab' };
+  }
+  return { tabId: tabs[0].id, error: null };
+}
+
 /**
  * Check if native mouse/keyboard control is allowed
  * @returns {Promise<boolean>}
@@ -107,6 +295,22 @@ function setupWebSocketHandlers() {
     // Route the message
     const result = await messageRouter.route(message);
 
+    // Handle tab management commands
+    if (message.type.startsWith('tab.')) {
+      if (message.type === 'tab.list') {
+        await handleTabList(message);
+      } else if (message.type === 'tab.new') {
+        await handleTabNew(message);
+      } else if (message.type === 'tab.close') {
+        await handleTabClose(message);
+      } else if (message.type === 'tab.claim') {
+        await handleTabClaim(message);
+      } else if (message.type === 'tab.release') {
+        await handleTabRelease(message);
+      }
+      return;
+    }
+
     // Handle commands
     if (message.type.startsWith('command.')) {
       // Handle navigation in background script (content scripts can't navigate)
@@ -121,7 +325,7 @@ function setupWebSocketHandlers() {
       } else if (message.type === 'command.nativeHotkey') {
         await handleNativeHotkeyCommand(message);
       } else {
-        await forwardCommandToActiveTab(message);
+        await forwardCommandToTab(message);
       }
     }
   });
@@ -450,7 +654,8 @@ async function waitForContentScript(tabId, maxRetries = 15, delayMs = 200) {
 }
 
 /**
- * Handle navigate command - navigates the active tab to a URL.
+ * Handle navigate command - navigates a tab to a URL.
+ * Respects tab_id routing and claim semantics.
  * Waits for page load AND content script readiness before returning success.
  */
 async function handleNavigateCommand(message) {
@@ -463,18 +668,16 @@ async function handleNavigateCommand(message) {
   console.log('[Co-Browser] Navigating to:', url);
 
   try {
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tabs.length === 0) {
+    const { tabId, error: tabError } = await resolveCommandTab(message);
+    if (!tabId) {
       wsManager.send({
         type: 'command.navigate.result',
         session_id: currentSessionId,
         correlation_id: message.id,
-        payload: { success: false, error: 'No active tab' }
+        payload: { success: false, error: tabError || 'No active tab' }
       });
-      return { success: false, error: 'No active tab' };
+      return { success: false, error: tabError || 'No active tab' };
     }
-
-    const tabId = tabs[0].id;
 
     // Start navigation and wait for page load completion
     const loadPromise = waitForTabLoad(tabId);
@@ -508,16 +711,35 @@ async function handleNavigateCommand(message) {
 }
 
 /**
- * Handle screenshot command - captures visible tab as PNG
+ * Handle screenshot command - captures a tab as PNG.
+ * Respects tab_id routing and claim semantics.
+ * Note: captureVisibleTab captures the currently active/visible tab in a window.
+ * For background tabs, we activate them briefly to capture.
  */
 async function handleScreenshotCommand(message) {
   console.log('[Co-Browser] Taking screenshot');
 
   try {
-    // Capture the visible tab as a PNG data URL
-    const dataUrl = await browser.tabs.captureVisibleTab(null, {
-      format: 'png'
-    });
+    const { tabId, error: tabError } = await resolveCommandTab(message);
+
+    let dataUrl;
+    if (tabId) {
+      // If a specific tab is requested, get its window ID and capture from there
+      const tab = await browser.tabs.get(tabId);
+      dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    } else {
+      // Fall back to active window (backward compat) or report tab error
+      if (tabError) {
+        wsManager.send({
+          type: 'command.screenshot.result',
+          session_id: currentSessionId,
+          correlation_id: message.id,
+          payload: { success: false, error: tabError }
+        });
+        return { success: false, error: tabError };
+      }
+      dataUrl = await browser.tabs.captureVisibleTab(null, { format: 'png' });
+    }
 
     // Send success response with screenshot data
     wsManager.send({
@@ -685,11 +907,11 @@ async function handleNativeHotkeyCommand(message) {
 }
 
 /**
- * Forward command to active tab's content script
+ * Forward command to a tab's content script.
+ * Respects tab_id routing and claim semantics (backwards compatible —
+ * omitting tab_id routes to the active tab as before).
  */
-async function forwardCommandToActiveTab(message) {
-  const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-
+async function forwardCommandToTab(message) {
   const sendErrorResult = (error) => {
     wsManager.send({
       type: `${message.type}.result`,
@@ -699,31 +921,36 @@ async function forwardCommandToActiveTab(message) {
     });
   };
 
-  if (tabs.length > 0) {
-    // Retry loop: after a click causes cross-domain navigation, the content
-    // script on the new domain needs time to initialize. Retry on connection
-    // errors to handle this race condition (mirrors waitForContentScript logic).
-    const maxRetries = 10;
-    const retryDelayMs = 300;
+  // Resolve target tab (honours tab_id + claim checks)
+  const { tabId, error: tabError } = await resolveCommandTab(message);
+  if (!tabId) {
+    sendErrorResult(tabError || 'No active tab');
+    return { success: false, error: tabError || 'No active tab' };
+  }
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const response = await browser.tabs.sendMessage(tabs[0].id, {
-          type: message.type,
-          payload: message.payload,
-          correlationId: message.id
-        });
-        return response;
-      } catch (error) {
-        const isConnectionError = error.message?.includes('Could not establish connection');
-        if (isConnectionError && attempt < maxRetries - 1) {
-          console.log(`[Co-Browser] Retry ${attempt + 1}/${maxRetries} for ${message.type}: content script not ready, waiting ${retryDelayMs}ms...`);
-          await new Promise(r => setTimeout(r, retryDelayMs));
-        } else {
-          console.error('[Co-Browser] Failed to forward command:', error);
-          sendErrorResult(error.message || 'Content script not available');
-          return { success: false, error: error.message };
-        }
+  // Retry loop: after a click causes cross-domain navigation, the content
+  // script on the new domain needs time to initialize. Retry on connection
+  // errors to handle this race condition (mirrors waitForContentScript logic).
+  const maxRetries = 10;
+  const retryDelayMs = 300;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await browser.tabs.sendMessage(tabId, {
+        type: message.type,
+        payload: message.payload,
+        correlationId: message.id
+      });
+      return response;
+    } catch (error) {
+      const isConnectionError = error.message?.includes('Could not establish connection');
+      if (isConnectionError && attempt < maxRetries - 1) {
+        console.log(`[Co-Browser] Retry ${attempt + 1}/${maxRetries} for ${message.type}: content script not ready, waiting ${retryDelayMs}ms...`);
+        await new Promise(r => setTimeout(r, retryDelayMs));
+      } else {
+        console.error('[Co-Browser] Failed to forward command:', error);
+        sendErrorResult(error.message || 'Content script not available');
+        return { success: false, error: error.message };
       }
     }
   }

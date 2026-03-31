@@ -245,6 +245,21 @@ async function handleMessage(message, sender, sendResponse) {
         // Screenshot is handled by background script
         return { success: true };
 
+      case 'command.getIdentity':
+        const identity = stateCapturer.captureIdentity();
+        sendActionResult('command.getIdentity', message.correlationId, identity);
+        return identity;
+
+      case 'command.getStructure':
+        const structure = stateCapturer.captureStructure();
+        sendActionResult('command.getStructure', message.correlationId, structure);
+        return structure;
+
+      case 'command.getSection':
+        const section = stateCapturer.captureSection(message.payload || {});
+        sendActionResult('command.getSection', message.correlationId, section);
+        return section;
+
       case 'command.getState':
         const state = stateCapturer.captureState(message.payload || {});
         sendActionResult('command.getState', message.correlationId, state);
