@@ -63,8 +63,12 @@ async function handleTabList(message) {
 async function handleTabNew(message) {
   const url = message.payload?.url || null;
   try {
-    const createProps = url ? { url } : {};
+    const createProps = (url && url.length > 0) ? { url } : {};
     const tab = await browser.tabs.create(createProps);
+    // If URL was requested but create returned about:blank, navigate explicitly
+    if (url && url.length > 0 && (!tab.url || tab.url === 'about:blank')) {
+      await browser.tabs.update(tab.id, { url });
+    }
     wsManager.send({
       type: 'tab.new.result',
       session_id: currentSessionId,
@@ -280,6 +284,10 @@ function setupWebSocketHandlers() {
 
   wsManager.on('disconnected', (event) => {
     console.log('[Co-Browser] Disconnected from service:', event.reason);
+
+    // Release all tab claims — agents are gone, stale claims block new agents
+    _tabClaims.clear();
+    console.log('[Co-Browser] Cleared all tab claims on disconnect');
 
     // Update badge to show disconnected
     browser.browserAction.setBadgeText({ text: 'OFF' });
