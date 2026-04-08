@@ -9,6 +9,11 @@ let StateCapturer;
 beforeAll(() => {
   const fs = require('fs');
   const path = require('path');
+  const xpathUtilsCode = fs.readFileSync(
+    path.join(__dirname, '../../content/xpath-utils.js'),
+    'utf8'
+  );
+  eval(xpathUtilsCode);
   const code = fs.readFileSync(
     path.join(__dirname, '../../content/state-capturer.js'),
     'utf8'
@@ -589,7 +594,7 @@ describe('StateCapturer', () => {
     test('returns error when selector is missing', () => {
       const result = capturer.captureSection({});
       expect(result.success).toBe(false);
-      expect(result.error).toContain('selector is required');
+      expect(result.error).toContain('selector or xpath is required');
     });
 
     test('returns error when selector not found', () => {
@@ -636,6 +641,10 @@ describe('StateCapturer', () => {
       expect(result.inputs.length).toBe(2);
       expect(result.buttons.length).toBe(1);
       expect(result.buttons[0].text).toBe('Submit');
+      expect(result.inputs[0].xpath).toBeDefined();
+      expect(result.inputs[0].selector).toBeUndefined();
+      expect(result.buttons[0].xpath).toBeDefined();
+      expect(result.buttons[0].selector).toBeUndefined();
     });
 
     test('returns links within section', () => {
@@ -649,6 +658,8 @@ describe('StateCapturer', () => {
       const result = capturer.captureSection({ selector: '#nav' });
       expect(result.links.length).toBe(3);
       expect(result.links[0].text).toBe('Home');
+      expect(result.links[0].xpath).toBeDefined();
+      expect(result.links[0].selector).toBeUndefined();
     });
 
     test('declarative extraction with field map', () => {
@@ -715,6 +726,55 @@ describe('StateCapturer', () => {
         limit: 5
       });
       expect(result.item_count).toBe(5);
+    });
+
+    test('supports section lookup by XPath', () => {
+      document.body.innerHTML = `
+        <section>
+          <div data-component-type="s-search-result"><a href="/one">One</a></div>
+          <div data-component-type="s-search-result"><a href="/two">Two</a></div>
+        </section>
+      `;
+
+      const result = capturer.captureSection({
+        xpath: '//div[@data-component-type="s-search-result"][2]'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.links[0].text).toBe('Two');
+    });
+  });
+
+  describe('XPath generation', () => {
+    test('buildXPath ignores generated IDs and anchors to stable ancestors', () => {
+      document.body.innerHTML = `
+        <main id="results">
+          <div id="f99665ae-0cbc-4539-af56-506b0ce99836"><a href="/one">One</a></div>
+          <div id="a99665ae-0cbc-4539-af56-506b0ce99837"><a href="/two">Two</a></div>
+        </main>
+      `;
+
+      const target = document.querySelectorAll('a')[1];
+      const xpath = capturer.buildXPath(target);
+
+      expect(xpath).not.toContain('f99665ae-0cbc-4539-af56-506b0ce99836');
+      expect(xpath).not.toContain('a99665ae-0cbc-4539-af56-506b0ce99837');
+      expect(xpath).toContain('//*[@id="results"]');
+    });
+
+    test('buildXPath can use semantic data attributes with positional disambiguation', () => {
+      document.body.innerHTML = `
+        <section>
+          <div data-component-type="s-search-result"><a href="/one">One</a></div>
+          <div data-component-type="s-search-result"><a href="/two">Two</a></div>
+        </section>
+      `;
+
+      const target = document.querySelectorAll('a')[1];
+      const xpath = capturer.buildXPath(target);
+
+      expect(xpath).toContain('@data-component-type="s-search-result"');
+      expect(xpath).toContain('[2]');
     });
   });
 

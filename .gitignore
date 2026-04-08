@@ -64,3 +64,5 @@ yarn-error.log*
 # Pythong
 .venv
 *.pyc
+*.dct.cache
+*.dct.cache*

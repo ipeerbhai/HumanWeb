@@ -27,6 +27,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "content/xpath-utils.js",
         "content/state-capturer.js",
         "content/action-executor.js",
         "content/dom-observer.js",

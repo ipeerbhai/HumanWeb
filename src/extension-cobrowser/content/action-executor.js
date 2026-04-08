@@ -1084,6 +1084,7 @@ class ActionExecutor {
 
         // Generate a unique selector for this element
         info.selector = this.generateSelector(el);
+        info.xpath = this.getSmartXPath(el);
 
         return info;
       });
@@ -1154,6 +1155,57 @@ class ActionExecutor {
     }
 
     return tag;
+  }
+
+  /**
+   * Returns true if an ID attribute value looks generated or dynamic.
+   * Catches UUIDs, CSS-in-JS hashes, CSS module IDs, and random alphanumeric tokens.
+   * @param {string} id
+   * @returns {boolean}
+   */
+  isGeneratedId(id) {
+    return globalThis.CoBrowserXPathUtils.isGeneratedId(id);
+  }
+
+  /**
+   * Returns the first class name from classList that looks human-authored,
+   * or null if none found.
+   * Skips framework-generated prefixes, single chars, pure numbers, and very short names.
+   * @param {DOMTokenList|string[]} classList
+   * @returns {string|null}
+   */
+  findSemanticClass(classList) {
+    return globalThis.CoBrowserXPathUtils.findSemanticClass(classList);
+  }
+
+  /**
+   * Tests whether an XPath expression uniquely identifies the expected element.
+   * Uses XPathResult.ORDERED_NODE_SNAPSHOT_TYPE for reliable multi-node checking.
+   * @param {string} xpath
+   * @param {Element} expectedElement
+   * @returns {boolean} true if xpath resolves to exactly 1 result and it is expectedElement
+   */
+  verifyXPath(xpath, expectedElement) {
+    return globalThis.CoBrowserXPathUtils.verifyXPath(xpath, expectedElement);
+  }
+
+  /**
+   * Generate a well-generalized XPath expression for a DOM element.
+   *
+   * Uses an attribute-priority cascade walking up from the element toward root:
+   *   1. Stable @id  (skipping generated/dynamic IDs)
+   *   2. @data-testid, @aria-label, @role
+   *   3. Semantic (human-authored) class via contains(@class, …)
+   *   4. Positional fallback: tag[N] among same-tag siblings
+   *
+   * Stops as soon as the built XPath uniquely identifies the target element.
+   * Walks at most 5 ancestor levels before returning the best positional path.
+   *
+   * @param {Element} element
+   * @returns {string}  Always starts with "//"
+   */
+  getSmartXPath(element) {
+    return globalThis.CoBrowserXPathUtils.getSmartXPath(element);
   }
 
   /**

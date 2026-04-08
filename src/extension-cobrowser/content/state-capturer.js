@@ -105,6 +105,17 @@ class StateCapturer {
   }
 
   /**
+   * Build a simplified XPath expression for an element.
+   * Tries stable attributes first (@id, @data-testid, @aria-label, @name),
+   * then falls back to a positional path walking up the DOM.
+   * @param {Element} element
+   * @returns {string}
+   */
+  buildXPath(element) {
+    return globalThis.CoBrowserXPathUtils.getSmartXPath(element);
+  }
+
+  /**
    * Build a unique selector for an element
    * @param {Element} element
    * @returns {string}
@@ -626,20 +637,26 @@ class StateCapturer {
    * @returns {object}
    */
   captureSection(options = {}) {
-    const { selector, maxChars = 3000, fields = null, limit = 25 } = options;
+    const { selector, xpath, maxChars = 3000, fields = null, limit = 25 } = options;
 
-    if (!selector) {
-      return { success: false, error: 'selector is required' };
+    if (!selector && !xpath) {
+      return { success: false, error: 'selector or xpath is required' };
     }
 
-    const root = document.querySelector(selector);
+    let root;
+    if (xpath) {
+      const xpathResult = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+      root = xpathResult.singleNodeValue;
+    } else {
+      root = document.querySelector(selector);
+    }
     if (!root) {
-      return { success: false, error: `Selector '${selector}' not found` };
+      return { success: false, error: `${xpath ? 'XPath' : 'Selector'} '${xpath || selector}' not found` };
     }
 
     const result = {
       success: true,
-      selector,
+      selector: selector || xpath,
       tag: root.tagName.toLowerCase(),
       chars: root.textContent.length
     };
@@ -664,7 +681,7 @@ class StateCapturer {
       const info = {
         tag: el.tagName.toLowerCase(),
         type: el.type || null,
-        selector: this.buildSelector(el),
+        xpath: this.buildXPath(el),
         text: (el.placeholder || el.getAttribute('aria-label') || el.name || '').substring(0, 60)
       };
       if (el.tagName === 'SELECT') {
@@ -682,7 +699,7 @@ class StateCapturer {
       result.buttons.push({
         text: (el.textContent?.trim() || el.value || '').substring(0, 60),
         type: el.type || 'button',
-        selector: this.buildSelector(el)
+        xpath: this.buildXPath(el)
       });
     });
 
@@ -692,7 +709,7 @@ class StateCapturer {
       result.links.push({
         text: (el.textContent?.trim() || '').substring(0, 60),
         href: el.href,
-        selector: this.buildSelector(el)
+        xpath: this.buildXPath(el)
       });
     });
 

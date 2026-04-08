@@ -9,6 +9,11 @@ let ActionExecutor;
 beforeAll(() => {
   const fs = require('fs');
   const path = require('path');
+  const xpathUtilsCode = fs.readFileSync(
+    path.join(__dirname, '../../content/xpath-utils.js'),
+    'utf8'
+  );
+  eval(xpathUtilsCode);
   const code = fs.readFileSync(
     path.join(__dirname, '../../content/action-executor.js'),
     'utf8'
@@ -457,6 +462,30 @@ describe('ActionExecutor', () => {
     test('returns null for non-existent XPath', () => {
       const found = executor.findElement({ xpath: '//div[@id="nonexistent"]' });
       expect(found).toBeNull();
+    });
+  });
+
+  describe('XPath generation', () => {
+    test('skips generated IDs when building smart XPath', () => {
+      container.innerHTML = `
+        <main id="results">
+          <div id="f99665ae-0cbc-4539-af56-506b0ce99836"><button>First</button></div>
+          <div id="a99665ae-0cbc-4539-af56-506b0ce99837"><button>Second</button></div>
+        </main>
+      `;
+
+      const target = container.querySelectorAll('button')[1];
+      const xpath = executor.getSmartXPath(target);
+
+      expect(xpath).not.toContain('f99665ae-0cbc-4539-af56-506b0ce99836');
+      expect(xpath).not.toContain('a99665ae-0cbc-4539-af56-506b0ce99837');
+      expect(xpath).toContain('//*[@id="results"]');
+    });
+
+    test('ignores puisg utility classes in favor of semantic classes', () => {
+      const semanticClass = executor.findSemanticClass(['puisg-row', 's-result-item']);
+
+      expect(semanticClass).toBe('s-result-item');
     });
   });
 });

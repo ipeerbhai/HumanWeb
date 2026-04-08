@@ -225,7 +225,7 @@ _BASE_TOOLS: List[Dict[str, Any]] = [
     },
     {
         "name": "cobrowser_query_all",
-        "description": "Query all elements matching a selector. Returns count and info about each element including attributes, classes, and text. Useful for finding form fields, list items, or understanding page structure.",
+        "description": "Query all elements matching a selector or XPath. Returns count and info about each element including attributes, classes, and text. Useful for finding form fields, list items, or understanding page structure.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -233,12 +233,16 @@ _BASE_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "CSS selector to match elements"
                 },
+                "xpath": {
+                    "type": "string",
+                    "description": "XPath expression to match elements (alternative to selector)"
+                },
                 "limit": {
                     "type": "number",
                     "description": "Maximum number of elements to return (default: 20, max: 50)"
                 }
             },
-            "required": ["selector"]
+            "required": []
         }
     },
     {
@@ -279,13 +283,17 @@ _BASE_TOOLS: List[Dict[str, Any]] = [
     },
     {
         "name": "cobrowser_page_section",
-        "description": "Read a specific section of a webpage by CSS selector. Returns scoped text content, interactive elements (buttons, inputs, forms), and links within that region. Optionally extract structured data from repeating child elements using a declarative field map (e.g. {\"title\": \"h3\", \"url\": \"a@href\", \"price\": \".cost\"}). Use after cobrowser_page_structure to zoom into a region of interest.",
+        "description": "Read a specific section of a webpage by CSS selector or XPath. Returns scoped text content, interactive elements (buttons, inputs, forms), and links within that region. Optionally extract structured data from repeating child elements using a declarative field map (e.g. {\"title\": \"h3\", \"url\": \"a@href\", \"price\": \".cost\"}). Use after cobrowser_page_structure to zoom into a region of interest.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "selector": {
                     "type": "string",
                     "description": "CSS selector targeting a page region (e.g. 'main', '#results', 'nav.sidebar')"
+                },
+                "xpath": {
+                    "type": "string",
+                    "description": "XPath expression for the section root element (alternative to selector)"
                 },
                 "max_chars": {
                     "type": "integer",
@@ -300,7 +308,7 @@ _BASE_TOOLS: List[Dict[str, Any]] = [
                     "description": "Max items when using fields extraction (default 25)"
                 }
             },
-            "required": ["selector"]
+            "required": []
         }
     },
     {
@@ -571,7 +579,7 @@ TOOL_TO_COMMAND: Dict[str, tuple] = {
     "cobrowser_read": ("command.read", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_scroll": ("command.scroll", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_get_page_info": ("command.getState", lambda a: {k: v for k, v in a.items() if k in ("tab_id", "agent_id") and v is not None}),
-    "cobrowser_query_all": ("command.queryAll", lambda a: {k: v for k, v in a.items() if v is not None}),
+    "cobrowser_query_all": ("command.queryAll", lambda a: {k: v for k, v in a.items() if v is not None and k != "xpath"} | ({"xpath": a["xpath"]} if "xpath" in a and a["xpath"] is not None else {})),
     "cobrowser_screenshot": ("command.screenshot", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_request_human": ("handoff.request", lambda a: {k: v for k, v in a.items() if v is not None}),
     "cobrowser_get_user_requests": ("user_requests.list", lambda a: {}),
@@ -585,7 +593,7 @@ TOOL_TO_COMMAND: Dict[str, tuple] = {
     "cobrowser_page_identity": ("command.getIdentity", lambda a: {}),
     "cobrowser_page_structure": ("command.getStructure", lambda a: {}),
     "cobrowser_page_section": ("command.getSection", lambda a: {
-        "selector": a.get("selector"),
+        **({k: v for k, v in {"selector": a.get("selector"), "xpath": a.get("xpath")}.items() if v is not None}),
         **({"maxChars": a["max_chars"]} if "max_chars" in a else {}),
         **({"fields": a["fields"]} if "fields" in a else {}),
         **({"limit": a["limit"]} if "limit" in a else {}),

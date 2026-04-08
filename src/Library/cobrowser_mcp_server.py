@@ -326,15 +326,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "cobrowser_query_all":
         selector = arguments.get("selector")
-        if not selector:
-            return [TextContent(type="text", text="Error: selector is required")]
+        xpath = arguments.get("xpath")
+        if not selector and not xpath:
+            return [TextContent(type="text", text="Error: selector or xpath is required")]
 
         limit = min(arguments.get("limit", 20), 50)
 
-        result = await send_command("command.queryAll", {
-            "selector": selector,
-            "limit": limit
-        }, tab_id=_tab_id, agent_id=_agent_id)
+        payload = {"limit": limit}
+        if selector:
+            payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
+
+        result = await send_command("command.queryAll", payload, tab_id=_tab_id, agent_id=_agent_id)
 
         if result.get("success"):
             data = result.get("result", result)  # Result may be nested under "result"
@@ -342,7 +346,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             total = data.get("total", count)
             elements = data.get("elements", [])
 
-            lines = [f"Found {len(elements)} elements (of {total} total matching '{selector}'):\n"]
+            query_desc = selector or xpath or '?'
+            lines = [f"Found {len(elements)} elements (of {total} total matching '{query_desc}'):\n"]
             for el in elements:
                 el_info = f"[{el.get('index')}] <{el.get('tagName')}"
                 if el.get('id'):
@@ -360,7 +365,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 if text:
                     el_info += f" \"{text[:40]}{'...' if len(text) > 40 else ''}\""
 
-                if el.get('selector'):
+                if el.get('xpath'):
+                    el_info += f"\n    xpath: {el['xpath']}"
+                elif el.get('selector'):
                     el_info += f"\n    → {el['selector']}"
 
                 lines.append(el_info)
@@ -463,10 +470,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "cobrowser_page_section":
         selector = arguments.get("selector")
-        if not selector:
-            return [TextContent(type="text", text="Error: selector is required")]
+        xpath = arguments.get("xpath")
+        if not selector and not xpath:
+            return [TextContent(type="text", text="Error: selector or xpath is required")]
 
-        payload = {"selector": selector}
+        payload = {}
+        if selector:
+            payload["selector"] = selector
+        if xpath:
+            payload["xpath"] = xpath
         if "max_chars" in arguments:
             payload["maxChars"] = arguments["max_chars"]
         if "fields" in arguments:
@@ -503,19 +515,22 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 lines.append(f"\nInputs ({len(inputs)}):")
                 for inp in inputs:
                     label = inp.get("text", "") or inp.get("type", "")
-                    lines.append(f"  [{inp.get('type', '?')}] {label} → {inp.get('selector', '?')}")
+                    ref = inp.get('xpath') or inp.get('selector', '?')
+                    lines.append(f"  [{inp.get('type', '?')}] {label} → {ref}")
 
             buttons = info.get("buttons", [])
             if buttons:
                 lines.append(f"\nButtons ({len(buttons)}):")
                 for btn in buttons:
-                    lines.append(f"  \"{btn.get('text', '')}\" → {btn.get('selector', '?')}")
+                    ref = btn.get('xpath') or btn.get('selector', '?')
+                    lines.append(f"  \"{btn.get('text', '')}\" → {ref}")
 
             links = info.get("links", [])
             if links:
                 lines.append(f"\nLinks ({len(links)}):")
                 for lnk in links:
-                    lines.append(f"  \"{lnk.get('text', '')}\" → {lnk.get('selector', '?')}")
+                    ref = lnk.get('xpath') or lnk.get('selector', '?')
+                    lines.append(f"  \"{lnk.get('text', '')}\" → {ref}")
 
             return [TextContent(type="text", text="\n".join(lines))]
         return format_result(result, f"Got section: {selector}")
