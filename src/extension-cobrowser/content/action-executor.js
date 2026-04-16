@@ -318,35 +318,93 @@ class ActionExecutor {
   }
 
   /**
-   * Find all elements by selector or XPath
+   * Find all elements by selector or XPath, descending into same-origin iframes.
+   * Elements found inside an iframe are tagged with _cobrowserIframe for downstream
+   * coordinate translation; cross-origin iframes are skipped silently.
    * @param {object} options - { selector, xpath, limit }
    * @returns {Element[]}
    */
   findAllElements(options) {
     const limit = options.limit || 50;  // Default max 50 elements
+    const results = [];
 
-    if (options.selector) {
-      const elements = document.querySelectorAll(options.selector);
-      return Array.from(elements).slice(0, limit);
-    }
+    const collect = (root, iframe = null) => {
+      if (results.length >= limit) return;
 
-    if (options.xpath) {
-      const result = document.evaluate(
-        options.xpath,
-        document,
-        null,
-        XPathResult.ORDERED_NODE_ITERATOR_TYPE,
-        null
-      );
-      const elements = [];
-      let node;
-      while ((node = result.iterateNext()) && elements.length < limit) {
-        elements.push(node);
+      let matches = [];
+      try {
+        if (options.selector) {
+          matches = Array.from(root.querySelectorAll(options.selector));
+        } else if (options.xpath) {
+          const r = root.evaluate(
+            options.xpath,
+            root,
+            null,
+            XPathResult.ORDERED_NODE_ITERATOR_TYPE,
+            null
+          );
+          let node;
+          while ((node = r.iterateNext())) {
+            matches.push(node);
+          }
+        }
+      } catch (e) {
+        return;
       }
-      return elements;
-    }
 
-    return [];
+      for (const el of matches) {
+        if (iframe) el._cobrowserIframe = iframe;
+        results.push(el);
+        if (results.length >= limit) return;
+      }
+    };
+
+    if (!options.selector && !options.xpath) return results;
+
+    const descendShadow = (root, iframe, depth) => {
+      if (results.length >= limit || depth >= 8) return;
+      let hosts;
+      try {
+        hosts = root.querySelectorAll('*');
+      } catch (e) {
+        return;
+      }
+      for (const el of hosts) {
+        if (results.length >= limit) return;
+        if (el.shadowRoot) {
+          collect(el.shadowRoot, iframe);
+          descendShadow(el.shadowRoot, iframe, depth + 1);
+        }
+      }
+    };
+
+    const visitFrame = (root, iframe = null, depth = 0) => {
+      if (results.length >= limit) return;
+      collect(root, iframe);
+      descendShadow(root, iframe, 0);
+      if (results.length >= limit || depth >= 5) return;
+
+      let nestedIframes;
+      try {
+        nestedIframes = root.querySelectorAll('iframe');
+      } catch (e) {
+        return;
+      }
+      for (const child of nestedIframes) {
+        if (results.length >= limit) return;
+        try {
+          const childDoc = child.contentDocument || child.contentWindow?.document;
+          if (!childDoc) continue;
+          visitFrame(childDoc, child, depth + 1);
+        } catch (e) {
+          // Cross-origin — skip
+        }
+      }
+    };
+
+    visitFrame(document);
+
+    return results;
   }
 
   /**
@@ -914,6 +972,41 @@ class ActionExecutor {
       // Focus the element
       element.focus();
 
+      // Contenteditable path: element.value is undefined on divs, so the
+      // legacy "value = ..." assignment silently fails. Use execCommand in
+      // the element's own document so React-managed editors (Quill, Slate,
+      // LinkedIn's composer) receive the change through their normal input
+      // pipeline.
+      if (element.isContentEditable) {
+        const ownerDoc = element.ownerDocument || document;
+        const ownerWin = ownerDoc.defaultView || window;
+
+        // execCommand requires an active caret inside the contenteditable.
+        // Establish one explicitly; focus() alone does not always place a
+        // selection — especially for elements reached through iframe descent
+        // or for editors that were never clicked (e.g., React-managed Quill).
+        const range = ownerDoc.createRange();
+        range.selectNodeContents(element);
+        range.collapse(false); // caret at end
+        const selection = ownerWin.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        if (options.clear) {
+          ownerDoc.execCommand('selectAll', false, null);
+          ownerDoc.execCommand('delete', false, null);
+        }
+
+        const inserted = ownerDoc.execCommand('insertText', false, options.text);
+
+        // Quill and similar editors listen to beforeinput/input; firing a
+        // final input event ensures any observer not triggered by
+        // execCommand sees the change.
+        element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+
+        return { success: inserted !== false };
+      }
+
       // Clear if requested
       if (options.clear) {
         element.value = '';
@@ -1064,6 +1157,8 @@ class ActionExecutor {
       const elements = this.findAllElements(options);
       const attributes = options.attributes || ['id', 'class', 'name', 'type', 'href', 'value'];
 
+      let iframeScopedCount = 0;
+
       const elementInfos = elements.map((el, index) => {
         const info = {
           index,
@@ -1086,6 +1181,11 @@ class ActionExecutor {
         info.selector = this.generateSelector(el);
         info.xpath = this.getSmartXPath(el);
 
+        if (el._cobrowserIframe) {
+          info.iframe = true;
+          iframeScopedCount++;
+        }
+
         return info;
       });
 
@@ -1093,7 +1193,8 @@ class ActionExecutor {
         success: true,
         count: elements.length,
         total: options.selector ? document.querySelectorAll(options.selector).length : elements.length,
-        elements: elementInfos
+        elements: elementInfos,
+        iframe_scoped: iframeScopedCount
       };
     } catch (error) {
       return {
