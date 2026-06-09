@@ -21,6 +21,61 @@ class ActionExecutor {
       'new-password',
       'one-time-code'
     ];
+
+    // Human-like typing cadence (ms between keystrokes). Real typists vary;
+    // a constant interval is a strong automation fingerprint. Kept small so
+    // automation stays responsive while still breaking the robotic cadence.
+    this.keyDelayMinMs = 18;
+    this.keyDelayMaxMs = 75;
+  }
+
+  /**
+   * Sleep for a jittered, human-like delay between two bounds.
+   * @param {number} minMs
+   * @param {number} maxMs
+   * @returns {Promise<void>}
+   */
+  humanDelay(minMs, maxMs) {
+    const ms = minMs + Math.random() * Math.max(0, maxMs - minMs);
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Type a string into a plain (non-contenteditable) input/textarea one
+   * character at a time, dispatching a realistic key event sequence for each.
+   * Builds .value incrementally so the final value matches what a human would
+   * have produced, while emitting keydown/keypress/input/keyup per character —
+   * which React-controlled inputs (and bot detectors) expect to see.
+   * @param {HTMLInputElement|HTMLTextAreaElement} element
+   * @param {string} text
+   * @returns {Promise<void>}
+   */
+  async typeHumanLike(element, text) {
+    for (const char of Array.from(text)) {
+      const keyInit = { key: char, bubbles: true, cancelable: true };
+      element.dispatchEvent(new KeyboardEvent('keydown', keyInit));
+      element.dispatchEvent(new KeyboardEvent('keypress', keyInit));
+
+      element.value = (element.value || '') + char;
+      // InputEvent carries inputType/data that some frameworks rely on;
+      // fall back to a plain Event in environments without the constructor.
+      let inputEvt;
+      if (typeof InputEvent === 'function') {
+        inputEvt = new InputEvent('input', {
+          bubbles: true,
+          cancelable: false,
+          data: char,
+          inputType: 'insertText'
+        });
+      } else {
+        inputEvt = new Event('input', { bubbles: true, cancelable: false });
+      }
+      element.dispatchEvent(inputEvt);
+
+      element.dispatchEvent(new KeyboardEvent('keyup', keyInit));
+
+      await this.humanDelay(this.keyDelayMinMs, this.keyDelayMaxMs);
+    }
   }
 
   /**
@@ -1012,15 +1067,13 @@ class ActionExecutor {
         element.value = '';
       }
 
-      // Type the text
-      const currentValue = element.value || '';
-      element.value = currentValue + options.text;
+      // Type the text one character at a time with human-like cadence.
+      // A bulk `.value = ...` assignment is both a bot signal and is silently
+      // rejected by many React-controlled inputs that never saw the keystrokes.
+      await this.typeHumanLike(element, options.text);
 
-      // Dispatch input event
-      const inputEvent = new Event('input', { bubbles: true, cancelable: true });
-      element.dispatchEvent(inputEvent);
-
-      // Dispatch change event
+      // Dispatch change event once at the end (fires on blur for real users,
+      // but many forms also listen here to commit the field).
       const changeEvent = new Event('change', { bubbles: true, cancelable: true });
       element.dispatchEvent(changeEvent);
 

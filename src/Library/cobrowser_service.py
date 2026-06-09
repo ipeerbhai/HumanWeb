@@ -18,12 +18,14 @@ Run with:
 
 import asyncio
 import json
+import random
 import secrets
 import time
 import uuid
 from typing import Dict, List, Optional, Any, Union
 from enum import Enum
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Header, Response
 from fastapi.responses import JSONResponse
@@ -220,19 +222,6 @@ async def handle_native_click(screen_x: float, screen_y: float) -> Dict[str, Any
         return {"success": False, "error": str(e)}
 
 
-async def handle_native_move(screen_x: float, screen_y: float) -> Dict[str, Any]:
-    """Move the mouse to screen coordinates without clicking."""
-    error = check_native_permission()
-    if error:
-        return error
-
-    try:
-        pyautogui.moveTo(screen_x, screen_y)
-        return {"success": True, "moved_to": {"x": screen_x, "y": screen_y}}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
 def get_firefox_window_id() -> Optional[int]:
     """
     Get Firefox window ID from xwininfo.
@@ -351,6 +340,50 @@ async def handle_native_cancel() -> Dict[str, Any]:
     native_control_allowed = False
     native_cancel_requested = True
     return {"success": True}
+
+
+# ============================================
+# Human-like action pacing
+# ============================================
+
+# Per-domain pacing avoids the robotic request bursts that trip anti-bot
+# systems (the failure mode that surfaced when hammering the same search).
+# Before each page-affecting action we wait out the remainder of a jittered
+# minimum interval since the last action to that same domain.
+_domain_last_action: Dict[str, float] = {}
+_PACING_MIN_INTERVAL = 0.6   # seconds minimum between same-domain actions
+_PACING_JITTER = 0.7         # plus a random 0..jitter seconds
+
+# Commands subject to pacing. Read-only introspection
+# (getIdentity/getStructure/getSection/read) is intentionally exempt so
+# inspecting a page stays fast.
+_PACED_COMMANDS = {
+    "command.navigate", "command.click", "command.doubleclick",
+    "command.rightclick", "command.type", "command.drag", "command.scroll",
+}
+
+
+async def _apply_domain_pacing(domain: Optional[str]) -> None:
+    """Sleep just enough to keep same-domain actions humanly spaced (jittered)."""
+    if not domain:
+        return
+    now = time.time()
+    last = _domain_last_action.get(domain, 0.0)
+    min_gap = _PACING_MIN_INTERVAL + random.random() * _PACING_JITTER
+    wait = (last + min_gap) - now
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _domain_last_action[domain] = time.time()
+
+
+def _domain_of(url: Optional[str]) -> Optional[str]:
+    """Extract the network location (host) from a URL, or None."""
+    if not url:
+        return None
+    try:
+        return urlparse(url).netloc or None
+    except Exception:
+        return None
 
 
 # ============================================
@@ -558,8 +591,12 @@ class CoBrowserService:
         self.sessions: Dict[str, Session] = {}
         # Track session history for tests
         self.session_history: set = set()
-        # Pending command responses: message_id -> (Future, result)
+        # Pending command responses: message_id -> Future
         self.pending_responses: Dict[str, asyncio.Future] = {}
+        # message_id -> session_id, so we can fail a session's in-flight
+        # requests immediately when its WebSocket drops (instead of leaving the
+        # caller blocked until the 30s timeout).
+        self.pending_response_session: Dict[str, str] = {}
 
     def create_session(self) -> Dict[str, Any]:
         """Create a new co-browsing session."""
@@ -675,6 +712,23 @@ class CoBrowserService:
             # Cleanup on disconnect
             if session_id in self.active_sessions:
                 del self.active_sessions[session_id]
+            # Fail any in-flight requests for this session so callers don't
+            # block until their timeout against a connection that's now gone.
+            self._fail_pending_for_session(
+                session_id, "Browser disconnected before responding"
+            )
+
+    def _fail_pending_for_session(self, session_id: str, reason: str) -> None:
+        """Reject all pending command futures belonging to a session."""
+        doomed = [
+            mid for mid, sid in self.pending_response_session.items()
+            if sid == session_id
+        ]
+        for mid in doomed:
+            future = self.pending_responses.pop(mid, None)
+            self.pending_response_session.pop(mid, None)
+            if future and not future.done():
+                future.set_exception(ConnectionError(reason))
 
     async def process_message(
         self,
@@ -841,6 +895,7 @@ class CoBrowserService:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         self.pending_responses[message_id] = future
+        self.pending_response_session[message_id] = session_id
 
         try:
             await websocket.send_json(message)
@@ -851,11 +906,15 @@ class CoBrowserService:
                 "message_type": result.get("type", "")
             }
         except asyncio.TimeoutError:
-            self.pending_responses.pop(message_id, None)
             return {"success": False, "error": "Command timed out"}
-        except Exception as e:
-            self.pending_responses.pop(message_id, None)
+        except ConnectionError as e:
+            # Raised by _fail_pending_for_session when the browser disconnects.
             return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            self.pending_responses.pop(message_id, None)
+            self.pending_response_session.pop(message_id, None)
 
 
 # ============================================
@@ -1214,9 +1273,28 @@ async def handle_mcp_tools_call(
         cobrowser_session_id = active_sessions[0]
         mcp_session.cobrowser_session_id = cobrowser_session_id
 
+        # Human-like pacing: space out same-domain interactions with jitter.
+        # For navigation the relevant domain is the destination; for everything
+        # else it's the page the session is currently on.
+        if command_type in _PACED_COMMANDS:
+            if name == "cobrowser_navigate":
+                pacing_domain = _domain_of(arguments.get("url"))
+            else:
+                sess = service.sessions.get(cobrowser_session_id)
+                pacing_domain = _domain_of(sess.state.get("url") if sess else None)
+            await _apply_domain_pacing(pacing_domain)
+
+        # Per-call timeout (callers may raise it for slow pages/long delays).
+        timeout = arguments.get("timeout")
+        try:
+            timeout = float(timeout) if timeout is not None else 30.0
+        except (TypeError, ValueError):
+            timeout = 30.0
+        timeout = min(max(1.0, timeout), 120.0)
+
         # Execute command directly via the service (no HTTP hop!)
         result = await service.send_command_and_wait(
-            cobrowser_session_id, command_type, payload, timeout=30.0
+            cobrowser_session_id, command_type, payload, timeout=timeout
         )
 
         # Post-navigation delay for JS hydration (e.g. Yahoo Finance real-time prices)
@@ -1225,6 +1303,22 @@ async def handle_mcp_tools_call(
             if delay and delay > 0:
                 delay = min(float(delay), 30.0)
                 await asyncio.sleep(delay)
+
+        # page_html maps to command.read (property=html), which returns the full
+        # innerHTML untruncated. Honor the advertised max_chars here so a large
+        # section can't blow up the context window unexpectedly.
+        if name == "cobrowser_page_html":
+            max_chars = arguments.get("max_chars", 5000)
+            try:
+                max_chars = int(max_chars)
+            except (TypeError, ValueError):
+                max_chars = 5000
+            inner = result.get("result", {}) if isinstance(result, dict) else {}
+            value = inner.get("value")
+            if isinstance(value, str) and len(value) > max_chars:
+                inner["value"] = value[:max_chars] + "\n<!-- HTML truncated -->"
+                inner["truncated"] = True
+                result["result"] = inner
 
         # For tab commands, unwrap the inner result payload for cleaner output
         if name.startswith("cobrowser_tab_"):

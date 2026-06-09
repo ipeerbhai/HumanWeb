@@ -239,18 +239,22 @@ describe('WebSocketManager', () => {
       expect(MockWebSocket.instances.length).toBe(3);
     });
 
-    test('caps reconnect attempts', () => {
+    test('retries indefinitely with capped backoff', () => {
       manager.connect('test-session');
       MockWebSocket.lastInstance.simulateOpen();
 
-      // Simulate many failures
+      const instancesBefore = MockWebSocket.instances.length;
+
+      // Simulate many failures — far more than the old fixed cap of 5
       for (let i = 0; i < 10; i++) {
         MockWebSocket.lastInstance.simulateClose(1006);
-        jest.advanceTimersByTime(120000); // 2 minutes
+        jest.advanceTimersByTime(120000); // 2 minutes — exceeds capped delay
       }
 
-      // Should stop attempting after max retries
-      expect(manager.getState()).toBe('disconnected');
+      // Keeps attempting to reconnect rather than giving up permanently:
+      // each failure spawns a new connection attempt.
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesBefore + 5);
+      expect(manager.getState()).not.toBe('disconnected');
     });
   });
 

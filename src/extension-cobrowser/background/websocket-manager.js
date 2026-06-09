@@ -32,9 +32,12 @@ class WebSocketManager {
     // Pending requests awaiting response
     this.pendingRequests = new Map();
 
-    // Reconnection settings
+    // Reconnection settings.
+    // We retry indefinitely (capped delay) rather than giving up after a fixed
+    // count: a co-browsing session may outlive transient outages, laptop sleep,
+    // or service restarts, and a permanently-dead socket strands the agent.
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
+    this.maxBackoffExponent = 5; // caps growth; delay still clamped below
     this.baseReconnectDelay = 1000;
     this.maxReconnectDelay = 30000;
     this.reconnectTimer = null;
@@ -43,6 +46,12 @@ class WebSocketManager {
     // Heartbeat settings
     this.heartbeatInterval = 30000; // 30 seconds
     this.heartbeatTimer = null;
+    // Liveness tracking: any inbound frame (incl. heartbeat.ack) updates this.
+    // If we go longer than heartbeatTimeout without hearing anything while
+    // "connected", the socket is a zombie (send() succeeds into the void) and
+    // we force a reconnect.
+    this.lastInboundTime = 0;
+    this.heartbeatTimeout = this.heartbeatInterval * 2;
   }
 
   /**
@@ -71,6 +80,7 @@ class WebSocketManager {
     this.ws.onopen = () => {
       this.state = 'connected';
       this.reconnectAttempts = 0;
+      this.lastInboundTime = Date.now();
       this.startHeartbeat();
       this.flushQueue();
       this.emit('connected', { sessionId });
@@ -244,6 +254,9 @@ class WebSocketManager {
    * @param {object} data - Parsed message data
    */
   handleMessage(data) {
+    // Any inbound frame proves the connection is alive.
+    this.lastInboundTime = Date.now();
+
     // Handle heartbeat ack silently
     if (data.type === 'heartbeat.ack') {
       return;
@@ -280,12 +293,24 @@ class WebSocketManager {
   startHeartbeat() {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      if (this.state === 'connected') {
-        this.send({
-          type: 'heartbeat',
-          payload: {}
-        });
+      if (this.state !== 'connected') return;
+
+      // Zombie-connection guard: if we haven't heard anything back for two
+      // heartbeat intervals, the socket is dead despite send() succeeding.
+      // Force-close so onclose fires and the normal reconnect path runs.
+      if (this.lastInboundTime &&
+          Date.now() - this.lastInboundTime > this.heartbeatTimeout) {
+        console.warn('[Co-Browser] Heartbeat timeout — forcing reconnect');
+        if (this.ws) {
+          this.ws.close(4001, 'Heartbeat timeout');
+        }
+        return;
       }
+
+      this.send({
+        type: 'heartbeat',
+        payload: {}
+      });
     }, this.heartbeatInterval);
   }
 
@@ -303,13 +328,12 @@ class WebSocketManager {
    * Schedule reconnection attempt
    */
   scheduleReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.state = 'disconnected';
-      return;
-    }
-
+    // Retry indefinitely with exponential backoff capped at maxReconnectDelay.
+    // The exponent is clamped so the delay plateaus (rather than terminating),
+    // keeping a steady reconnect heartbeat until the service returns.
+    const exponent = Math.min(this.reconnectAttempts, this.maxBackoffExponent);
     const delay = Math.min(
-      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts),
+      this.baseReconnectDelay * Math.pow(2, exponent),
       this.maxReconnectDelay
     );
 
