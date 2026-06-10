@@ -359,6 +359,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     el_info += f" name=\"{el['name']}\""
                 if el.get('type'):
                     el_info += f" type=\"{el['type']}\""
+                if el.get('href'):
+                    href = el['href'][:150]
+                    el_info += f" href=\"{href}{'...' if len(el['href']) > 150 else ''}\""
+                if el.get('value'):
+                    value = str(el['value'])[:50]
+                    el_info += f" value=\"{value}{'...' if len(str(el['value'])) > 50 else ''}\""
                 el_info += ">"
 
                 text = el.get('text', '')
